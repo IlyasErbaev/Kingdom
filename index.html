@@ -6,9 +6,8 @@
 <title>PAX — Мировой Движок v4 · Мультиплеер</title>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Cinzel:wght@400;600;700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
 
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<!-- PeerJS for P2P multiplayer -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 
 <style>
 :root {
@@ -396,9 +395,10 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
   <div id="screen-waiting" class="lobby-card" style="display:none;">
     <div class="lc-title">Ожидание противника</div>
     <div class="room-code-display">
-      <div class="code" id="room-code-show">----</div>
-      <div class="hint">Дайте этот код другому игроку</div>
+      <div class="code" id="room-code-show" style="font-size:13px;letter-spacing:2px;word-break:break-all;line-height:1.5;">Генерируем код...</div>
+      <div class="hint" id="room-code-hint">Скопируйте и отправьте другу</div>
     </div>
+    <button class="lobby-btn secondary" id="copy-code-btn" onclick="copyCode()" style="margin-bottom:12px;">📋 Скопировать код</button>
     <div style="text-align:center;color:#444;font-size:12px;font-style:italic;">
       Ожидаем второго правителя<span class="waiting-dot">.</span><span class="waiting-dot">.</span><span class="waiting-dot">.</span>
     </div>
@@ -408,7 +408,7 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
   <!-- JOIN -->
   <div id="screen-join" class="lobby-card" style="display:none;">
     <div class="lc-title">Войти в игру</div>
-    <input class="lobby-input" id="join-code-in" placeholder="Код комнаты (4 символа)..." maxlength="4" autocomplete="off" style="text-align:center;font-family:'Cinzel',serif;font-size:24px;letter-spacing:8px;text-transform:uppercase;">
+    <input class="lobby-input" id="join-code-in" placeholder="Вставьте код от друга..." maxlength="64" autocomplete="off" style="font-size:12px;letter-spacing:1px;">
     <button class="lobby-btn" onclick="joinGame()">Войти</button>
     <button class="lobby-btn secondary" onclick="backToMulti()">← Назад</button>
     <div id="lobby-status3" style="font-size:12px;color:#555;text-align:center;margin-top:14px;font-style:italic;min-height:18px;"></div>
@@ -502,24 +502,10 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════════
-//  FIREBASE CONFIG — используем публичный анонимный проект для простоты
-//  Можно заменить на свой проект firebase
+//  PEERJS — P2P мультиплеер, работает без сервера
 // ═══════════════════════════════════════════════════════════════════════════════
-const firebaseConfig = {
-  apiKey: "AIzaSyC4Q3oJb-j3W5MvBKuOJXOFuZn6q35bKXY",
-  authDomain: "pax-game-mp.firebaseapp.com",
-  databaseURL: "https://pax-game-mp-default-rtdb.firebaseio.com",
-  projectId: "pax-game-mp",
-  storageBucket: "pax-game-mp.appspot.com",
-};
-
-let fbApp, fbDb;
-try {
-  fbApp = firebase.initializeApp(firebaseConfig);
-  fbDb = firebase.database();
-} catch(e) {
-  console.warn('Firebase init failed, solo only:', e);
-}
+let peer = null;       // наш PeerJS объект
+let conn = null;       // активное соединение с противником
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GAME CONFIG
@@ -553,10 +539,9 @@ function pickPersonality(used){const avail=PERSONALITIES.filter(p=>!used.has(p.a
 // ═══════════════════════════════════════════════════════════════════════════════
 let isMultiplayer = false;
 let myPlayerId = null;   // 1 or 2
-let roomCode = null;
-let roomRef = null;
-let myTurn = true;       // In solo always true; in MP alternates
+let myTurn = true;
 let gameStarted = false;
+let sharedSeed = null;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GAME STATE
@@ -609,115 +594,155 @@ function goJoin(){
   document.getElementById('screen-join').style.display='block';
 }
 function backToMulti(){
+  if(peer){ peer.destroy(); peer=null; }
   document.getElementById('screen-join').style.display='none';
   document.getElementById('screen-multi').style.display='block';
 }
-
-function genRoomCode(){
-  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  return Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
-}
-
-async function hostGame(){
-  if(!fbDb){alert('Firebase недоступен. Попробуйте другой браузер.');return;}
-  getInputs();
-  roomCode = genRoomCode();
-  document.getElementById('screen-multi').style.display='none';
-  document.getElementById('screen-waiting').style.display='block';
-  document.getElementById('room-code-show').textContent = roomCode;
-
-  roomRef = fbDb.ref('rooms/'+roomCode);
-  // Init room
-  const initState = buildInitialState();
-  await roomRef.set({
-    host:{ruler:myRulerName,realm:myRealmName},
-    guest:null,
-    state: initState,
-    turn: 1,
-    whoseTurn: 1,
-    moves:[],
-    created: Date.now()
-  });
-
-  // Listen for guest
-  roomRef.child('guest').on('value', snap=>{
-    if(snap.val()){
-      const g = snap.val();
-      p2RulerName = g.ruler;
-      p2RealmName = g.realm;
-      myPlayerId = 1;
-      isMultiplayer = true;
-      startMultiGame(initState);
-    }
-  });
-
-  // Auto-cleanup after 10 min
-  setTimeout(()=>{if(!gameStarted)cancelHost();},600000);
-}
-
-async function joinGame(){
-  if(!fbDb){alert('Firebase недоступен.');return;}
-  getInputs();
-  const code = document.getElementById('join-code-in').value.trim().toUpperCase();
-  if(code.length!==4){document.getElementById('lobby-status3').textContent='Введите 4-символьный код';return;}
-
-  roomRef = fbDb.ref('rooms/'+code);
-  const snap = await roomRef.once('value');
-  if(!snap.val()){
-    document.getElementById('lobby-status3').textContent='Комната не найдена. Проверьте код.';
-    return;
-  }
-  const room = snap.val();
-  if(room.guest){
-    document.getElementById('lobby-status3').textContent='Комната уже занята.';
-    return;
-  }
-
-  roomCode = code;
-  p2RulerName = room.host.ruler;
-  p2RealmName = room.host.realm;
-  myPlayerId = 2;
-  isMultiplayer = true;
-
-  // Register as guest
-  await roomRef.child('guest').set({ruler:myRulerName,realm:myRealmName});
-
-  // Load state
-  const initState = room.state;
-  startMultiGame(initState);
-}
-
 function cancelHost(){
-  if(roomRef) roomRef.remove();
+  if(peer){ peer.destroy(); peer=null; }
   document.getElementById('screen-waiting').style.display='none';
   document.getElementById('screen-multi').style.display='block';
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  MULTIPLAYER GAME START
-// ═══════════════════════════════════════════════════════════════════════════════
-function buildInitialState(){
-  // We'll store the random seed so both clients get same map
-  return { seed: Math.floor(Math.random()*999999) };
+// ─── PeerJS helpers ────────────────────────────────────────────────────────────
+function peerSend(data){
+  if(conn && conn.open) conn.send(JSON.stringify(data));
 }
 
-function startMultiGame(initState){
-  gameStarted = true;
-  // Set ruler names
-  const myId = myPlayerId;
-  const oppId = myPlayerId===1 ? 2 : 1;
+function onPeerData(raw){
+  let msg;
+  try{ msg = JSON.parse(raw); }catch(e){ return; }
 
-  kingdoms[myId].ruler = myRulerName;
-  kingdoms[myId].name  = myRealmName.toUpperCase().slice(0,16);
-  kingdoms[oppId].ruler = (myPlayerId===1)?p2RulerName:p2RulerName;
-  kingdoms[oppId].name  = (myPlayerId===1)?(p2RealmName.toUpperCase().slice(0,16)):(p2RealmName.toUpperCase().slice(0,16));
+  if(msg.type === 'HELLO'){
+    // Guest sends their name/realm to host after connect
+    p2RulerName = msg.ruler;
+    p2RealmName = msg.realm;
+    const oppId = myPlayerId===1?2:1;
+    kingdoms[oppId].ruler = p2RulerName;
+    kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
+    // Host sends back seed + their name
+    peerSend({type:'START', seed:sharedSeed, ruler:myRulerName, realm:myRealmName});
+    launchMultiGame();
+  }
+  else if(msg.type === 'START'){
+    // Guest receives seed + host name
+    p2RulerName = msg.ruler;
+    p2RealmName = msg.realm;
+    sharedSeed = msg.seed;
+    const oppId = myPlayerId===1?2:1;
+    kingdoms[oppId].ruler = p2RulerName;
+    kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
+    launchMultiGame();
+  }
+  else if(msg.type === 'MOVE'){
+    applyOpponentMove(msg);
+  }
+  else if(msg.type === 'PING'){
+    peerSend({type:'PONG'});
+  }
+}
+
+function copyCode(){
+  const id = document.getElementById('room-code-show').dataset.fullId || document.getElementById('room-code-show').textContent;
+  navigator.clipboard.writeText(id).then(()=>{
+    document.getElementById('copy-code-btn').textContent='✅ Скопировано!';
+    setTimeout(()=>document.getElementById('copy-code-btn').textContent='📋 Скопировать код',2000);
+  }).catch(()=>{
+    // fallback: select text
+    const el = document.getElementById('room-code-show');
+    const range = document.createRange(); range.selectNode(el);
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  });
+}
+
+// ─── HOST GAME ─────────────────────────────────────────────────────────────────
+function hostGame(){
+  getInputs();
+  myPlayerId = 1;
+  isMultiplayer = true;
+  sharedSeed = Math.floor(Math.random()*999999);
+
+  const status = document.getElementById('lobby-status2');
+  status.textContent = 'Инициализация...';
+
+  peer = new Peer(undefined, {debug:1});
+
+  peer.on('error', e=>{
+    status.textContent = 'Ошибка: ' + e.type + '. Попробуйте снова.';
+    console.error('PeerJS error:', e);
+  });
+
+  peer.on('open', id=>{
+    const codeEl = document.getElementById('room-code-show');
+    codeEl.textContent = id;
+    codeEl.dataset.fullId = id;
+
+    document.getElementById('screen-multi').style.display='none';
+    document.getElementById('screen-waiting').style.display='block';
+    status.textContent = '';
+  });
+
+  peer.on('connection', c=>{
+    conn = c;
+    conn.on('open', ()=>{
+      conn.on('data', onPeerData);
+    });
+    conn.on('error', e=> console.error('conn error',e));
+  });
+}
+
+// ─── JOIN GAME ─────────────────────────────────────────────────────────────────
+function joinGame(){
+  getInputs();
+  const rawCode = document.getElementById('join-code-in').value.trim();
+  if(!rawCode){ document.getElementById('lobby-status3').textContent='Введите код'; return; }
+
+  myPlayerId = 2;
+  isMultiplayer = true;
+
+  const status3 = document.getElementById('lobby-status3');
+  status3.textContent = 'Подключаемся...';
+
+  peer = new Peer(undefined, {debug:1});
+
+  peer.on('error', e=>{
+    status3.textContent = 'Ошибка подключения: ' + e.type + '. Проверьте код.';
+    console.error('PeerJS error:', e);
+  });
+
+  peer.on('open', ()=>{
+    // Try to connect using the code as peer ID
+    // The host shows first 6 chars — we need to find full ID
+    // Strategy: try direct connection with code as-is first (works if user pastes full ID)
+    // For short code: use peerjs lookup — but simpler: just use full peer ID
+    // We'll show full peer ID to host and guest enters it
+    conn = peer.connect(rawCode, {reliable:true});
+
+    conn.on('open', ()=>{
+      status3.textContent = 'Соединение установлено!';
+      conn.on('data', onPeerData);
+      // Send hello with our info
+      peerSend({type:'HELLO', ruler:myRulerName, realm:myRealmName});
+    });
+
+    conn.on('error', e=>{
+      status3.textContent = 'Не удалось подключиться. Проверьте код.';
+      console.error('conn error', e);
+    });
+  });
+}
+
+// ─── LAUNCH MULTI GAME ─────────────────────────────────────────────────────────
+function launchMultiGame(){
+  gameStarted = true;
+  kingdoms[myPlayerId].ruler = myRulerName;
+  kingdoms[myPlayerId].name  = myRealmName.toUpperCase().slice(0,16);
 
   document.getElementById('lobby').style.display='none';
   document.getElementById('main').style.display='flex';
 
-  initGame(initState.seed);
+  initGame(sharedSeed);
 
-  // Player 1 starts, player 2 waits
   if(myPlayerId===2){
     myTurn = false;
     setTurnBlock(true);
@@ -725,35 +750,18 @@ function startMultiGame(initState){
     myTurn = true;
     setTurnBlock(false);
   }
-
-  // Listen for opponent moves
-  listenForOpponentMove();
 }
 
-function listenForOpponentMove(){
-  if(!roomRef) return;
-  roomRef.child('moves').on('child_added', snap=>{
-    const move = snap.val();
-    if(!move) return;
-    if(move.by === myPlayerId) return; // Our own move, skip
-    if(move.processed) return;
-
-    // Apply opponent's move locally
-    applyOpponentMove(move);
-  });
-}
-
+// ─── APPLY OPPONENT MOVE ───────────────────────────────────────────────────────
 function applyOpponentMove(move){
-  // The opponent sent their message & AI response to apply
-  if(move.aiResult){
-    const ai = move.aiResult;
+  const ai = move.aiResult;
+  if(ai){
     applyGold(ai.gold_update);
     applyRel(ai.relations_update);
     execAction(ai.action);
     if(ai.news) addNews(ai.news.title, ai.news.body);
-    // Show opponent message in chat
     const oppId = myPlayerId===1?2:1;
-    addDeclMsg(oppId, move.userMsg, 'Противник говорит своим правителям...');
+    addDeclMsg(oppId, move.userMsg, 'указ противника');
     if(ai.reply) addMsg(ai.speaker_id, ai.reply);
     if(ai.bot_action_desc) addMsg(ai.speaker_id,`<i style="color:#444;font-size:11px">${ai.bot_action_desc}</i>`,true);
     if(ai.history_note) addHistory(ai.history_note);
@@ -762,9 +770,6 @@ function applyOpponentMove(move){
     turnNum++;
     updateUI();
   }
-
-  // Mark as processed & give turn to me
-  snap && snap.ref && snap.ref.update({processed:true});
   myTurn = true;
   setTurnBlock(false);
   addSystemMsg('⚡ Ваш ход, правитель.');
@@ -799,6 +804,7 @@ let rng = Math.random;
 
 function initGame(seed){
   if(seed!==undefined) rng = seededRand(seed);
+  else rng = Math.random;
   resize(); buildCells(); seedKingdoms();
   for(let i=0;i<140;i++) grow();
   initRelations(); assignPersonalities();
@@ -1324,15 +1330,12 @@ async function send(){
     turnNum++;
     updateUI();
 
-    // In multiplayer: push move to Firebase, then block
-    if(isMultiplayer && roomRef){
-      const moveKey = roomRef.child('moves').push().key;
-      await roomRef.child('moves/'+moveKey).set({
-        by: myPlayerId,
+    // In multiplayer: send move to opponent via PeerJS, then block
+    if(isMultiplayer && conn){
+      peerSend({
+        type: 'MOVE',
         userMsg: val,
-        aiResult: ai,
-        ts: Date.now(),
-        processed: false
+        aiResult: ai
       });
       myTurn = false;
       setTurnBlock(true);
