@@ -357,9 +357,30 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
 .tw-dot:nth-child(3){animation-delay:.4s;}
 @keyframes twDot{0%,80%,100%{transform:scale(.5);opacity:.3}40%{transform:scale(1);opacity:1}}
 
-/* ═══ SCROLLBAR ═══ */
-::-webkit-scrollbar{width:3px;height:3px;}
-::-webkit-scrollbar-thumb{background:#14121a;}
+/* ═══ PROVINCE LABELS ═══ */
+.prov-label{
+  position:absolute;pointer-events:none;
+  font-family:'Cinzel',serif;font-size:8px;font-weight:700;
+  color:rgba(255,255,255,0.22);letter-spacing:1px;text-transform:uppercase;
+  text-shadow:0 1px 3px #000,0 0 6px #000;
+  white-space:nowrap;transform:translate(-50%,-50%);
+  z-index:4;transition:color .3s;
+}
+/* ═══ NEXT TURN BUTTON ═══ */
+#next-turn-btn{
+  background:linear-gradient(135deg,#1a2a12,#0e1a0a);
+  color:#6a9a40;border:1px solid #2a4a1a;
+  padding:0 16px;border-radius:1px;cursor:pointer;
+  font-family:'Cinzel',serif;font-size:8px;letter-spacing:2px;
+  text-transform:uppercase;transition:.2s;white-space:nowrap;
+  border-top:1px solid rgba(100,200,50,.15);
+  position:relative;overflow:hidden;
+}
+#next-turn-btn::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.04),transparent);}
+#next-turn-btn:hover:not(:disabled){background:linear-gradient(135deg,#22380e,#142010);color:#8acc50;letter-spacing:3px;}
+#next-turn-btn:disabled{opacity:.3;cursor:not-allowed;}
+#next-turn-btn.processing{color:#c09430;border-color:#3a2a10;background:linear-gradient(135deg,#1a1a08,#101008);animation:turnPulse 1s ease-in-out infinite;}
+@keyframes turnPulse{0%,100%{opacity:.6}50%{opacity:1}}
 </style>
 </head>
 <body>
@@ -494,6 +515,7 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
       <div id="hints"></div>
       <div class="input-row">
         <input type="text" id="user-in" placeholder="Ваш указ, посыл или действие..." autocomplete="off">
+        <button id="next-turn-btn" title="Закончить ход — боты ответят">⏭ Ход</button>
         <button id="send-btn">Послать</button>
       </div>
     </div>
@@ -717,8 +739,10 @@ function hostGame(){
 
     peer.on('open', id=>{
       const codeEl = document.getElementById('room-code-show');
-      codeEl.textContent = id;
-      codeEl.dataset.fullId = id;
+      // Encode server index into code so guest knows which server to use
+      const fullCode = `${peerServerIndex}:${id}`;
+      codeEl.textContent = fullCode;
+      codeEl.dataset.fullId = fullCode;
 
       document.getElementById('screen-multi').style.display='none';
       document.getElementById('screen-waiting').style.display='block';
@@ -748,13 +772,30 @@ function joinGame(){
 
   const status3 = document.getElementById('lobby-status3');
 
+  // Parse server index from code format "serverIdx:peerId"
+  let targetPeerId = rawCode;
+  let forcedServerIdx = -1;
+  if(rawCode.includes(':') && rawCode.indexOf(':') < 3){
+    const parts = rawCode.split(':');
+    const idx = parseInt(parts[0]);
+    if(!isNaN(idx) && idx < PEER_SERVERS.length){
+      forcedServerIdx = idx;
+      targetPeerId = parts.slice(1).join(':');
+    }
+  }
+
   // ── ИСПРАВЛЕНИЕ: createGuestPeer с перебором серверов + retry ──
   function createGuestPeer(attempt){
     if(attempt > PEER_SERVERS.length){
       status3.textContent = '❌ Не удалось подключиться ни к одному серверу. Проверьте интернет.';
       return;
     }
-    peerServerIndex = (attempt - 1) % PEER_SERVERS.length;
+    // If host encoded server index, use it first
+    if(forcedServerIdx >= 0 && attempt === 1){
+      peerServerIndex = forcedServerIdx;
+    } else {
+      peerServerIndex = (attempt - 1) % PEER_SERVERS.length;
+    }
     status3.textContent = `Подключаемся (сервер ${attempt}/${PEER_SERVERS.length})...`;
 
     if(peer){ try{ peer.destroy(); }catch(e){} peer=null; }
@@ -779,7 +820,7 @@ function joinGame(){
 
       // ── ИСПРАВЛЕНИЕ: небольшая задержка, чтобы сервер зарегистрировал хоста
       setTimeout(()=>{
-        conn = peer.connect(rawCode, {reliable:true});
+        conn = peer.connect(targetPeerId, {reliable:true});
 
         conn.on('open', ()=>{
           status3.textContent = 'Соединение установлено!';
@@ -845,6 +886,7 @@ function setTurnBlock(block){
   document.getElementById('turn-overlay').classList.toggle('show', block);
   document.getElementById('send-btn').disabled = block;
   document.getElementById('user-in').disabled = block;
+  document.getElementById('next-turn-btn').disabled = block;
   const badge = document.getElementById('mp-turn-badge');
   if(isMultiplayer){
     badge.textContent = block ? 'ХОД ПРОТИВНИКА' : 'ВАШ ХОД';
@@ -855,8 +897,93 @@ function setTurnBlock(block){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  GAME INIT
+//  PROVINCES — named regions on the map
 // ═══════════════════════════════════════════════════════════════════════════════
+// Defined as fractional positions (0-1) of canvas width/height
+const PROVINCE_DEFS = [
+  // North row
+  {name:"НОРДХЕЙМ",   fx:.12, fy:.14},
+  {name:"ВАЛЬКАРД",   fx:.30, fy:.10},
+  {name:"СЕРЕБРЯНЫЙ КРЯЖ", fx:.50, fy:.08},
+  {name:"ЛЕДЯНОЙ ЗУБ", fx:.70, fy:.11},
+  {name:"ЭСТМАРК",    fx:.88, fy:.14},
+  // Middle-north row
+  {name:"ДИКИЕ ПОЛЯ", fx:.20, fy:.28},
+  {name:"ГРЕЙХОЛД",   fx:.38, fy:.25},
+  {name:"СРЕДИННЫЙ ТРАКТ", fx:.58, fy:.24},
+  {name:"АЛЫЙ ПРЕДЕЛ", fx:.77, fy:.27},
+  // Center
+  {name:"КАМЕННЫЙ БРОД", fx:.12, fy:.45},
+  {name:"ВОЛЬНЫЙ ТОРГ",  fx:.29, fy:.42},
+  {name:"КРОВАВАЯ РАВНИНА", fx:.50, fy:.50},
+  {name:"ПУСТОШЬ ОГНЯ",  fx:.71, fy:.43},
+  {name:"ВОСТОЧНЫЕ ВРАТА", fx:.88, fy:.45},
+  // Middle-south row
+  {name:"ТЕНЕВОЙ ЛЕС",  fx:.20, fy:.63},
+  {name:"РЕЧНЫЕ ЗЕМЛИ", fx:.38, fy:.67},
+  {name:"ЗОЛОТОЙ БРОД",  fx:.58, fy:.66},
+  {name:"БУРАЯ СТЕПЬ",   fx:.77, fy:.62},
+  // South row
+  {name:"ЮЖНЫЙ ПРЕДЕЛ", fx:.12, fy:.82},
+  {name:"ХРЕБЕТ ДРАКОНА", fx:.30, fy:.86},
+  {name:"ВЕЛИКИЙ ЮГ",  fx:.50, fy:.88},
+  {name:"ГОРЬКИЕ ГОРЫ", fx:.70, fy:.85},
+  {name:"ЗАКАТНЫЙ БЕРЕГ", fx:.88, fy:.82},
+];
+
+let provinceEls = [];
+
+function buildProvinceLabels(){
+  // Remove old
+  provinceEls.forEach(el=>el.remove());
+  provinceEls = [];
+  const vp = document.getElementById('viewport');
+  PROVINCE_DEFS.forEach(p=>{
+    const el = document.createElement('div');
+    el.className = 'prov-label';
+    el.textContent = p.name;
+    el.style.left = (p.fx * 100) + '%';
+    el.style.top  = (p.fy * 100) + '%';
+    vp.appendChild(el);
+    provinceEls.push(el);
+  });
+}
+
+// Get province name for a fractional position
+function getProvinceName(fx, fy){
+  let best=null, bestDist=Infinity;
+  PROVINCE_DEFS.forEach(p=>{
+    const d=Math.hypot(p.fx-fx, p.fy-fy);
+    if(d<bestDist){bestDist=d;best=p;}
+  });
+  return best?best.name:'—';
+}
+
+// Get dominant kingdom in a province area
+function getProvinceOwner(fx, fy, radius=0.06){
+  const cw = canvas.width, ch = canvas.height;
+  const cx_ = fx*cw, cy_ = fy*ch, r2 = radius*Math.min(cw,ch);
+  const counts = {};
+  cells.forEach(c=>{
+    const dx=c.x*CELL+CELL/2-cx_, dy=c.y*CELL+CELL/2-cy_;
+    if(Math.sqrt(dx*dx+dy*dy)<r2 && c.owner){
+      counts[c.owner]=(counts[c.owner]||0)+1;
+    }
+  });
+  let best=null,bestC=0;
+  Object.entries(counts).forEach(([id,n])=>{if(n>bestC){bestC=n;best=parseInt(id);}});
+  return best;
+}
+
+// Build province ownership string for AI prompt
+function buildProvinceMap(){
+  return PROVINCE_DEFS.map(p=>{
+    const ownerId = getProvinceOwner(p.fx, p.fy);
+    const k = ownerId ? kingdoms[ownerId] : null;
+    return `"${p.name}"→${k?k.name:'нейтрально'}`;
+  }).join(', ');
+}
+
 function seededRand(seed){
   let s = seed;
   return function(){
@@ -879,6 +1006,7 @@ function initGame(seed){
   updateMpBar();
   updateThrone();
   buildHints();
+  buildProvinceLabels();
   document.getElementById('user-in').focus();
 }
 
@@ -1304,6 +1432,8 @@ function buildPrompt(){
     ? `ВАЖНО: ID1 (${kingdoms[1].name}) и ID2 (${kingdoms[2].name}) — оба ЖИВЫЕ ИГРОКИ. Не говори от их имени. speaker_id может быть только из [${botIds.join(',')}].`
     : `ID1 (${kingdoms[1].name}) — живой игрок. speaker_id никогда не равен 1.`;
 
+  const provMap = buildProvinceMap();
+
   return `Ты — WORLD ENGINE. Управляешь живым миром Pax. Всё происходит на глазах великих правителей.
 Активный игрок сейчас — ID${myId} (${kingdoms[myId]?.name}, правитель ${kingdoms[myId]?.ruler}).
 
@@ -1313,14 +1443,35 @@ ${mpNote}
 ${colorMap}
 Дипломатия: ${relState}
 
-═══ ЛИЧНОСТИ ПРАВИТЕЛЕЙ — НПС ═══
+═══ ПРОВИНЦИИ МИРА ═══
+Карта поделена на именованные провинции. Всегда используй их названия при описании территорий!
+${provMap}
+При захвате/обмене ВСЕГДА упоминай конкретные провинции по имени (например: "атакую провинцию КРОВАВАЯ РАВНИНА").
+Когда игрок говорит "возьми те территории" — уточни/выбери ближайшую провинцию по контексту.
+
+═══ ЛИЧНОСТИ ПРАВИТЕЛЕЙ — КРИТИЧНО ═══
 ${persLines}
+
+⚠️ КРИТИЧЕСКОЕ ПРАВИЛО ЛИЧНОСТЕЙ:
+★ ТИРАН — НИКОГДА не соглашается на мирные предложения без огромной выгоды. Агрессивен по умолчанию.
+★ ТОРГОВЕЦ — соглашается только если есть золото/выгода. Требует оплату. Не воюет бесплатно.
+★ ДИПЛОМАТ — предлагает сложные условия. Никогда не соглашается сразу — торгуется.
+★ ПАРАНОИК — отвергает любой союз с подозрением. Видит скрытые мотивы в каждом предложении.
+★ АВАНТЮРИСТ — может согласиться или отказать СЛУЧАЙНО. Непредсказуем.
+★ МУДРЕЦ — долго думает, задаёт встречные вопросы, не торопится.
+★ БЕРСЕРК — на любое мирное предложение отвечает угрозой войны.
+★ ИНТРИГАН — соглашается НА СЛОВАХ но делает противоположное в action.
+★ ТРУС — соглашается только со СИЛЬНЫМИ, унижает СЛАБЫХ.
+
+★ ЗАПРЕЩЕНО: боты НЕ говорят "конечно!", "я согласен!", "мы можем обсудить!" без веской причины по архетипу.
+★ Боты ОТКАЗЫВАЮТ, УГРОЖАЮТ, ТОРГУЮТСЯ — в зависимости от своей личности.
+★ Каждая реплика должна показывать характер правителя, а не быть шаблонной вежливостью.
 
 ═══ АТМОСФЕРА — КРИТИЧНО ═══
 ★ Пиши реплики как настоящий правитель средневековья / фэнтезийного мира. С достоинством, угрозой или лестью — в зависимости от архетипа.
 ★ Используй первое лицо: "Мои легионы...", "Я, Зерхаль, не потерплю...", "Будьте осторожны, правитель..."
 ★ ГОЛОС каждого правителя — это закон. Тиран не скажет "давайте обсудим". Трус не скажет "я вас уничтожу".
-★ Ответы живые, не шаблонные. Минимум 2-3 предложения в реплике. Упоминай конкретные события, территории, союзы.
+★ Ответы живые, не шаблонные. Минимум 2-3 предложения в реплике. Упоминай конкретные провинции.
 ★ Боты реагируют на действия игрока и могут сами инициировать войны, союзы, требования.
 
 ═══ ПРАВИЛА ДЕЙСТВИЙ ═══
@@ -1339,9 +1490,9 @@ reinforce: from=чья территория мерцает
 ═══ ФОРМАТ ОТВЕТА — ТОЛЬКО JSON, БЕЗ MARKDOWN ═══
 {
   "speaker_id": число,
-  "reply": "Реплика В ГОЛОСЕ ПРАВИТЕЛЯ — атмосферная, первое лицо, конкретная",
-  "bot_action_desc": "Что происходит в мире (необязательно)",
-  "news": {"title": "заголовок", "body": "2-3 предложения"},
+  "reply": "Реплика В ГОЛОСЕ ПРАВИТЕЛЯ — атмосферная, первое лицо, конкретная, упоминает провинции",
+  "bot_action_desc": "Что происходит в мире с указанием провинций (необязательно)",
+  "news": {"title": "заголовок", "body": "2-3 предложения с названиями провинций"},
   "action": {"type": "...", "from": id, "to": id, "count": число},
   "gold_update": {"id": дельта},
   "relations_update": {"A-B": "war|peace|ally|neutral"},
@@ -1412,7 +1563,79 @@ async function send(){
 
 document.getElementById('send-btn').onclick=send;
 document.getElementById('user-in').onkeydown=e=>{if(e.key==='Enter')send();};
-window.addEventListener('resize',()=>{if(gameStarted)resize();});
+window.addEventListener('resize',()=>{if(gameStarted){resize();buildProvinceLabels();}});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  NEXT TURN — боты ходят по очереди
+// ═══════════════════════════════════════════════════════════════════════════════
+async function nextTurn(){
+  if(!isMultiplayer&&document.getElementById('next-turn-btn').disabled) return;
+  const btn = document.getElementById('next-turn-btn');
+  btn.disabled = true;
+  btn.classList.add('processing');
+  btn.textContent = '⏳ Боты ходят...';
+  document.getElementById('send-btn').disabled = true;
+  document.getElementById('user-in').disabled = true;
+
+  const botIds = isMultiplayer ? [3,4] : [2,3,4];
+
+  addSystemMsg(`— Ход ${turnNum}: слово предоставляется правителям —`);
+
+  for(const botId of botIds){
+    const k = kingdoms[botId];
+    if(!k) continue;
+    const p = k.personality||{};
+    const botPrompt = `Сейчас ХОД ПРАВИТЕЛЯ ID${botId} (${k.name}, ${k.ruler}, АРХЕТИП: ${p.archetype}).
+Действуй согласно своей повестке: ${p.agenda}
+Голос: ${p.voice}
+Соверши одно действие (завоевание, дипломатию, сбор золота или угрозу) и произнеси реплику.
+speaker_id ДОЛЖЕН быть ${botId}.`;
+
+    try{
+      const resp=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+        method:"POST",
+        headers:{"Authorization":`Bearer ${API_KEY}`,"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"google/gemini-2.0-flash-001",
+          messages:[{role:"system",content:buildPrompt()},...chatHistory.slice(-6),{role:"user",content:botPrompt}]
+        })
+      });
+      const data=await resp.json();
+      const raw=data.choices[0].message.content;
+      const jsonStr=(raw.match(/```json\s*([\s\S]*?)```/)||raw.match(/\{[\s\S]*\}/))?.[1]||(raw.match(/\{[\s\S]*\}/)||[''])[0];
+      const ai=JSON.parse(jsonStr);
+      chatHistory.push({role:"user",content:botPrompt},{role:"assistant",content:jsonStr});
+
+      applyGold(ai.gold_update);
+      applyRel(ai.relations_update);
+      execAction(ai.action);
+      if(ai.news) addNews(ai.news.title, ai.news.body);
+      if(ai.reply) addMsg(botId, ai.reply);
+      if(ai.bot_action_desc) addMsg(botId,`<i style="color:#444;font-size:11px">${ai.bot_action_desc}</i>`,true);
+      if(ai.history_note) addHistory(ai.history_note);
+      const labels={conquest:'⚔️ Завоевание',exchange:'🔄 Обмен',spawn:'🌱 Новая сила',revolt:'⚡ Восстание',nuke:'💥 Удар',reinforce:'🛡️ Укрепление'};
+      if(ai.action&&labels[ai.action.type]) flashEvent(labels[ai.action.type]);
+    }catch(e){
+      console.error('Bot turn error',botId,e);
+      addSystemMsg(`${k.name}: оракул молчит...`);
+    }
+    // small pause between bots for drama
+    await new Promise(r=>setTimeout(r,400));
+  }
+
+  turnNum++;
+  updateUI();
+  addSystemMsg(`— Ход ${turnNum} начинается. Ваше слово, правитель —`);
+
+  btn.disabled = false;
+  btn.classList.remove('processing');
+  btn.textContent = '⏭ Ход';
+  document.getElementById('send-btn').disabled = false;
+  document.getElementById('user-in').disabled = false;
+  document.getElementById('user-in').focus();
+}
+
+document.getElementById('next-turn-btn').onclick = nextTurn;
 </script>
 </body>
 </html>
