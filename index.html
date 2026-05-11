@@ -502,15 +502,45 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════════
-//  PEERJS — P2P мультиплеер, работает без сервера
+//  PEERJS — P2P мультиплеер
 // ═══════════════════════════════════════════════════════════════════════════════
-let peer = null;       // наш PeerJS объект
-let conn = null;       // активное соединение с противником
+let peer = null;
+let conn = null;
+
+// ─── Конфигурация PeerJS с надёжными STUN/TURN серверами ──────────────────────
+// Используем несколько серверов для отказоустойчивости
+const PEER_CONFIG = {
+  debug: 1,
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
+    ]
+  }
+};
+
+// Список серверов для перебора при ошибке
+const PEER_SERVERS = [
+  // Сервер 1: официальный peerjs.com
+  { host: '0.peerjs.com', port: 443, path: '/', secure: true },
+  // Сервер 2: альтернативный публичный сервер
+  { host: 'peerjs.medula.io', port: 443, path: '/', secure: true },
+];
+let peerServerIndex = 0;
+
+function makePeerOptions(extra = {}) {
+  const srv = PEER_SERVERS[peerServerIndex % PEER_SERVERS.length];
+  return { ...srv, ...PEER_CONFIG, ...extra };
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  GAME CONFIG
 // ═══════════════════════════════════════════════════════════════════════════════
-const API_KEY = "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";
+const API_KEY = "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";
 const canvas = document.getElementById('map');
 const ctx = canvas.getContext('2d');
 const CELL = 14;
@@ -614,18 +644,15 @@ function onPeerData(raw){
   try{ msg = JSON.parse(raw); }catch(e){ return; }
 
   if(msg.type === 'HELLO'){
-    // Guest sends their name/realm to host after connect
     p2RulerName = msg.ruler;
     p2RealmName = msg.realm;
     const oppId = myPlayerId===1?2:1;
     kingdoms[oppId].ruler = p2RulerName;
     kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
-    // Host sends back seed + their name
     peerSend({type:'START', seed:sharedSeed, ruler:myRulerName, realm:myRealmName});
     launchMultiGame();
   }
   else if(msg.type === 'START'){
-    // Guest receives seed + host name
     p2RulerName = msg.ruler;
     p2RealmName = msg.realm;
     sharedSeed = msg.seed;
@@ -648,7 +675,6 @@ function copyCode(){
     document.getElementById('copy-code-btn').textContent='✅ Скопировано!';
     setTimeout(()=>document.getElementById('copy-code-btn').textContent='📋 Скопировать код',2000);
   }).catch(()=>{
-    // fallback: select text
     const el = document.getElementById('room-code-show');
     const range = document.createRange(); range.selectNode(el);
     window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
@@ -665,30 +691,50 @@ function hostGame(){
   const status = document.getElementById('lobby-status2');
   status.textContent = 'Инициализация...';
 
-  peer = new Peer(undefined, {debug:1});
+  // ── ИСПРАВЛЕНИЕ: createPeer с перебором серверов при ошибке ──
+  function createPeer(attempt){
+    if(attempt > PEER_SERVERS.length){
+      status.textContent = '❌ Не удалось подключиться к серверу. Попробуйте позже.';
+      return;
+    }
+    peerServerIndex = (attempt - 1) % PEER_SERVERS.length;
+    status.textContent = `Инициализация (сервер ${attempt}/${PEER_SERVERS.length})...`;
 
-  peer.on('error', e=>{
-    status.textContent = 'Ошибка: ' + e.type + '. Попробуйте снова.';
-    console.error('PeerJS error:', e);
-  });
+    if(peer){ try{ peer.destroy(); }catch(e){} peer=null; }
 
-  peer.on('open', id=>{
-    const codeEl = document.getElementById('room-code-show');
-    codeEl.textContent = id;
-    codeEl.dataset.fullId = id;
+    peer = new Peer(undefined, makePeerOptions());
 
-    document.getElementById('screen-multi').style.display='none';
-    document.getElementById('screen-waiting').style.display='block';
-    status.textContent = '';
-  });
-
-  peer.on('connection', c=>{
-    conn = c;
-    conn.on('open', ()=>{
-      conn.on('data', onPeerData);
+    peer.on('error', e=>{
+      console.error('PeerJS HOST error:', e.type, e);
+      if(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'socket-closed'){
+        // Попробуем следующий сервер
+        status.textContent = `Сервер недоступен, пробуем другой...`;
+        setTimeout(()=> createPeer(attempt + 1), 1000);
+      } else {
+        status.textContent = 'Ошибка: ' + e.type + '. Попробуйте снова.';
+      }
     });
-    conn.on('error', e=> console.error('conn error',e));
-  });
+
+    peer.on('open', id=>{
+      const codeEl = document.getElementById('room-code-show');
+      codeEl.textContent = id;
+      codeEl.dataset.fullId = id;
+
+      document.getElementById('screen-multi').style.display='none';
+      document.getElementById('screen-waiting').style.display='block';
+      status.textContent = '';
+    });
+
+    peer.on('connection', c=>{
+      conn = c;
+      conn.on('open', ()=>{
+        conn.on('data', onPeerData);
+      });
+      conn.on('error', e=> console.error('conn error',e));
+    });
+  }
+
+  createPeer(1);
 }
 
 // ─── JOIN GAME ─────────────────────────────────────────────────────────────────
@@ -701,35 +747,55 @@ function joinGame(){
   isMultiplayer = true;
 
   const status3 = document.getElementById('lobby-status3');
-  status3.textContent = 'Подключаемся...';
 
-  peer = new Peer(undefined, {debug:1});
+  // ── ИСПРАВЛЕНИЕ: createGuestPeer с перебором серверов + retry ──
+  function createGuestPeer(attempt){
+    if(attempt > PEER_SERVERS.length){
+      status3.textContent = '❌ Не удалось подключиться ни к одному серверу. Проверьте интернет.';
+      return;
+    }
+    peerServerIndex = (attempt - 1) % PEER_SERVERS.length;
+    status3.textContent = `Подключаемся (сервер ${attempt}/${PEER_SERVERS.length})...`;
 
-  peer.on('error', e=>{
-    status3.textContent = 'Ошибка подключения: ' + e.type + '. Проверьте код.';
-    console.error('PeerJS error:', e);
-  });
+    if(peer){ try{ peer.destroy(); }catch(e){} peer=null; }
 
-  peer.on('open', ()=>{
-    // Try to connect using the code as peer ID
-    // The host shows first 6 chars — we need to find full ID
-    // Strategy: try direct connection with code as-is first (works if user pastes full ID)
-    // For short code: use peerjs lookup — but simpler: just use full peer ID
-    // We'll show full peer ID to host and guest enters it
-    conn = peer.connect(rawCode, {reliable:true});
+    peer = new Peer(undefined, makePeerOptions());
 
-    conn.on('open', ()=>{
-      status3.textContent = 'Соединение установлено!';
-      conn.on('data', onPeerData);
-      // Send hello with our info
-      peerSend({type:'HELLO', ruler:myRulerName, realm:myRealmName});
+    peer.on('error', e=>{
+      console.error('PeerJS GUEST error:', e.type, e);
+      if(e.type === 'peer-unavailable'){
+        // peer-unavailable: пир не найден — не меняем сервер, показываем ошибку
+        status3.textContent = '❌ Код не найден. Убедитесь, что хост ждёт вас, и скопируйте код полностью.';
+      } else if(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'socket-closed'){
+        status3.textContent = `Сервер недоступен, пробуем другой...`;
+        setTimeout(()=> createGuestPeer(attempt + 1), 1000);
+      } else {
+        status3.textContent = 'Ошибка: ' + e.type + '. Проверьте код.';
+      }
     });
 
-    conn.on('error', e=>{
-      status3.textContent = 'Не удалось подключиться. Проверьте код.';
-      console.error('conn error', e);
+    peer.on('open', ()=>{
+      status3.textContent = 'Ищем правителя...';
+
+      // ── ИСПРАВЛЕНИЕ: небольшая задержка, чтобы сервер зарегистрировал хоста
+      setTimeout(()=>{
+        conn = peer.connect(rawCode, {reliable:true});
+
+        conn.on('open', ()=>{
+          status3.textContent = 'Соединение установлено!';
+          conn.on('data', onPeerData);
+          peerSend({type:'HELLO', ruler:myRulerName, realm:myRealmName});
+        });
+
+        conn.on('error', e=>{
+          status3.textContent = '❌ Не удалось подключиться. Проверьте код.';
+          console.error('conn error', e);
+        });
+      }, 500);
     });
-  });
+  }
+
+  createGuestPeer(1);
 }
 
 // ─── LAUNCH MULTI GAME ─────────────────────────────────────────────────────────
@@ -792,7 +858,6 @@ function setTurnBlock(block){
 //  GAME INIT
 // ═══════════════════════════════════════════════════════════════════════════════
 function seededRand(seed){
-  // Simple LCG for deterministic map
   let s = seed;
   return function(){
     s = (s * 1664525 + 1013904223) & 0xffffffff;
@@ -855,7 +920,6 @@ function initRelations(){
 function assignPersonalities(){
   const used=new Set();
   Object.keys(kingdoms).forEach(id=>{
-    // Don't overwrite human players
     if(isMultiplayer&&(parseInt(id)===1||parseInt(id)===2)){
       kingdoms[id].personality={archetype:"ПРАВИТЕЛЬ",emoji:"👑",voice:"Живой игрок.",agenda:"Победить противника."};
       if(!kingdoms[id].ruler) kingdoms[id].ruler=randName();
@@ -1136,7 +1200,6 @@ function addMsg(id,text,isBotAction){
   win.parentElement.scrollTop=win.parentElement.scrollHeight;
 }
 
-// Special styled diplomatic declaration
 function addDeclMsg(id, text, note){
   const win=document.getElementById('chat-window');
   const k=kingdoms[id]||{name:'—',color:'#666',title:'',ruler:'',personality:{}};
@@ -1231,7 +1294,6 @@ function buildPrompt(){
     return `ID${id}(${k.name}): [${rels}]`;
   }).join(' | ');
 
-  // In multiplayer, both P1 and P2 are human — only P3 and P4 are AI
   const botIds = isMultiplayer ? [3,4] : [2,3,4];
   const persLines=Object.entries(kingdoms).filter(([id])=>botIds.includes(parseInt(id))).map(([id,k])=>{
     const p=k.personality||{};
@@ -1296,7 +1358,6 @@ async function send(){
   const val=inp.value.trim();if(!val||btn.disabled)return;
 
   const myId=getMyKingdomId();
-  // Show as diplomatic declaration
   addDeclMsg(myId, val, 'ваш указ');
   inp.value='';btn.disabled=true;
   document.getElementById('thinking').style.display='block';
@@ -1330,7 +1391,6 @@ async function send(){
     turnNum++;
     updateUI();
 
-    // In multiplayer: send move to opponent via PeerJS, then block
     if(isMultiplayer && conn){
       peerSend({
         type: 'MOVE',
