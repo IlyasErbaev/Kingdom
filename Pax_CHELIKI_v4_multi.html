@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PAX — Мировой Движок v4 · Мультиплеер</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Cinzel:wght@400;600;700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+<style>
+:root {
+  --bg: #04040a;
+  --panel: #07070f;
+  --border: #14141e;
+  --text: #c8bfa8;
+  --accent: #9a2a10;
+  --gold: #c09430;
+  --gold2: #8a6820;
+  --dim: #33303a;
+  --parchment: #1a1610;
+  --seal: #6a1a08;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+
+body,html{
+  height:100%;background:var(--bg);color:var(--text);
+  font-family:'IM Fell English',serif;overflow:hidden;
+}
+
+/* ═══ LOBBY SCREEN ═══ */
+#lobby{
+  position:fixed;inset:0;z-index:100;
+  background:radial-gradient(ellipse at 50% 40%, #0d0810 0%, #04040a 70%);
+  display:flex;align-items:center;justify-content:center;
+  flex-direction:column;gap:0;
+}
+.lobby-ornament{
+  font-family:'Cinzel Decorative',serif;
+  font-size:9px;letter-spacing:6px;color:var(--gold2);
+  text-transform:uppercase;margin-bottom:18px;opacity:0.7;
+}
+.lobby-title{
+  font-family:'Cinzel Decorative',serif;
+  font-size:clamp(28px,5vw,54px);font-weight:900;
+  color:var(--gold);
+  text-shadow:0 0 60px rgba(192,148,48,.3),0 2px 0 #000;
+  letter-spacing:8px;margin-bottom:6px;
+  animation:titlePulse 4s ease-in-out infinite;
+}
+@keyframes titlePulse{0%,100%{text-shadow:0 0 40px rgba(192,148,48,.2)}50%{text-shadow:0 0 80px rgba(192,148,48,.5),0 0 20px rgba(192,148,48,.3)}}
+.lobby-sub{
+  font-family:'Cinzel',serif;font-size:11px;letter-spacing:4px;
+  color:#403830;text-transform:uppercase;margin-bottom:40px;
+}
+.lobby-sep{
+  width:320px;height:1px;
+  background:linear-gradient(90deg,transparent,var(--gold2),transparent);
+  margin:0 auto 36px;
+}
+.lobby-card{
+  background:rgba(10,9,16,0.95);
+  border:1px solid #1e1a10;
+  border-top:2px solid var(--gold2);
+  padding:28px 32px;
+  max-width:480px;width:90%;
+  position:relative;
+}
+.lobby-card::before{
+  content:'';position:absolute;inset:0;
+  background:repeating-linear-gradient(0deg,transparent,transparent 28px,rgba(255,255,255,.012) 28px,rgba(255,255,255,.012) 29px);
+  pointer-events:none;
+}
+.lc-title{
+  font-family:'Cinzel',serif;font-size:10px;letter-spacing:3px;
+  color:var(--gold2);text-transform:uppercase;margin-bottom:20px;
+  display:flex;align-items:center;gap:8px;
+}
+.lc-title::before,.lc-title::after{content:'';flex:1;height:1px;background:var(--border);}
+.lobby-input{
+  width:100%;background:rgba(4,4,10,.9);border:1px solid #222;
+  color:var(--text);padding:12px 16px;font-family:'IM Fell English',serif;
+  font-size:15px;outline:none;border-radius:2px;margin-bottom:10px;
+  transition:border-color .2s;
+}
+.lobby-input:focus{border-color:var(--gold2);}
+.lobby-input::placeholder{color:#2a2520;font-style:italic;}
+.lobby-btn{
+  width:100%;padding:13px;background:var(--accent);color:#f0e8d8;
+  border:none;font-family:'Cinzel',serif;font-size:11px;letter-spacing:3px;
+  text-transform:uppercase;cursor:pointer;transition:.2s;border-radius:1px;
+  position:relative;overflow:hidden;
+}
+.lobby-btn::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.05),transparent);}
+.lobby-btn:hover{background:#b03015;letter-spacing:4px;}
+.lobby-btn.secondary{background:transparent;border:1px solid #2a2520;color:#555;margin-top:8px;}
+.lobby-btn.secondary:hover{border-color:#444;color:#888;letter-spacing:3px;}
+.lobby-divider{display:flex;align-items:center;gap:10px;margin:16px 0;color:#222;font-size:11px;font-family:'Cinzel',serif;letter-spacing:2px;}
+.lobby-divider::before,.lobby-divider::after{content:'';flex:1;height:1px;background:#161610;}
+#lobby-status{font-size:12px;color:#555;text-align:center;margin-top:14px;font-style:italic;min-height:18px;transition:.3s;}
+.room-code-display{
+  text-align:center;padding:14px;background:#050508;border:1px solid #1a1830;
+  border-radius:2px;margin-bottom:14px;
+}
+.room-code-display .code{
+  font-family:'Cinzel',serif;font-size:28px;letter-spacing:10px;
+  color:var(--gold);
+}
+.room-code-display .hint{font-size:11px;color:#333;margin-top:6px;font-style:italic;}
+.waiting-dot{display:inline-block;animation:waitDot 1.4s ease-in-out infinite;}
+.waiting-dot:nth-child(2){animation-delay:.2s;}
+.waiting-dot:nth-child(3){animation-delay:.4s;}
+@keyframes waitDot{0%,80%,100%{opacity:.2}40%{opacity:1}}
+
+/* ═══ MAIN LAYOUT ═══ */
+#main{display:flex;width:100vw;height:100vh;}
+#viewport{position:relative;flex-grow:1;background:#000;overflow:hidden;}
+canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
+
+/* ═══ THRONE HEADER ═══ */
+#throne-bar{
+  position:absolute;top:0;left:0;right:0;height:44px;
+  background:linear-gradient(180deg,rgba(4,3,8,.98),rgba(4,3,8,.7));
+  border-bottom:1px solid #14120a;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;z-index:10;backdrop-filter:blur(8px);
+}
+.throne-left{display:flex;align-items:center;gap:12px;}
+.throne-emblem{
+  font-family:'Cinzel Decorative',serif;font-size:8px;
+  color:var(--gold2);letter-spacing:3px;opacity:.7;
+}
+.throne-ruler-name{
+  font-family:'Cinzel',serif;font-size:13px;font-weight:700;
+  color:var(--gold);
+  text-shadow:0 0 20px rgba(192,148,48,.3);
+}
+.throne-title{font-size:10px;color:#444;font-style:italic;margin-left:4px;}
+.throne-right{display:flex;align-items:center;gap:16px;}
+.throne-turn{
+  font-family:'Cinzel',serif;font-size:9px;letter-spacing:2px;
+  color:#333;
+}
+.throne-turn span{color:var(--gold);}
+
+/* ═══ MP INDICATOR ═══ */
+#mp-bar{
+  position:absolute;top:44px;left:0;right:0;height:28px;
+  background:rgba(4,3,8,.85);border-bottom:1px solid #0e0e18;
+  display:flex;align-items:center;padding:0 14px;gap:12px;z-index:9;
+}
+.mp-player{
+  display:flex;align-items:center;gap:6px;
+  font-family:'Cinzel',serif;font-size:8px;letter-spacing:1px;
+  padding:2px 8px;border-radius:1px;border:1px solid transparent;
+  transition:.3s;
+}
+.mp-player.active{border-color:var(--gold2);background:rgba(192,148,48,.06);}
+.mp-player.online{border-color:#1a3a1a;}
+.mp-dot{width:6px;height:6px;border-radius:50%;animation:mpPulse 2s ease-in-out infinite;}
+@keyframes mpPulse{0%,100%{opacity:.6}50%{opacity:1}}
+.mp-turn-badge{
+  margin-left:auto;font-family:'Cinzel',serif;font-size:8px;
+  letter-spacing:2px;padding:2px 10px;border-radius:1px;
+}
+.mp-turn-badge.yours{background:rgba(154,42,16,.25);border:1px solid var(--accent);color:var(--accent);}
+.mp-turn-badge.theirs{background:rgba(0,0,0,.3);border:1px solid #1a1a1a;color:#333;}
+
+/* ═══ HUD ═══ */
+#hud{
+  position:absolute;top:80px;left:12px;
+  background:rgba(4,4,10,.93);padding:12px 16px;
+  border:1px solid #1a1610;border-top:1px solid var(--gold2);
+  pointer-events:none;min-width:200px;z-index:5;
+  backdrop-filter:blur(8px);
+}
+#hud-title{
+  font-family:'Cinzel',serif;color:var(--gold2);font-size:8px;
+  letter-spacing:3px;margin-bottom:10px;padding-bottom:6px;
+  border-bottom:1px solid #14120a;text-transform:uppercase;
+}
+.f-row{display:flex;align-items:center;gap:7px;margin-bottom:6px;flex-wrap:wrap;}
+.f-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+.f-name{font-family:'Cinzel',serif;font-size:10px;font-weight:700;flex-grow:1;}
+.f-stat{font-size:9px;color:var(--gold);}
+.f-arch{width:100%;padding-left:15px;font-size:9px;color:#2e2c38;font-style:italic;margin-top:-2px;}
+.f-you{font-size:8px;padding:1px 5px;background:rgba(192,148,48,.1);border:1px solid var(--gold2);color:var(--gold);border-radius:1px;margin-left:2px;}
+
+/* ═══ TOOLTIP ═══ */
+#tooltip{
+  position:absolute;pointer-events:none;
+  background:rgba(4,4,10,.97);border:1px solid #1e1a10;
+  border-top:1px solid var(--gold2);
+  padding:10px 13px;font-size:11px;color:#aaa;
+  display:none;z-index:20;line-height:1.7;max-width:190px;
+}
+
+/* ═══ INCOME TICKER ═══ */
+#income-tick{position:absolute;top:80px;right:14px;display:flex;flex-direction:column;gap:4px;z-index:10;pointer-events:none;}
+.tick-item{
+  font-size:11px;font-family:'Cinzel',serif;padding:3px 10px;
+  border-radius:1px;background:rgba(4,4,10,.9);border:1px solid #1a1610;
+  animation:tickFade 2.5s ease forwards;
+}
+@keyframes tickFade{0%{opacity:0;transform:translateY(4px)}20%{opacity:1;transform:translateY(0)}80%{opacity:1}100%{opacity:0;transform:translateY(-8px)}}
+
+/* ═══ EVENT FLASH ═══ */
+#event-flash{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(0,0,0,.92);border:1px solid var(--accent);
+  border-top:2px solid var(--gold);
+  padding:12px 28px;font-family:'Cinzel',serif;font-size:14px;
+  color:var(--gold);z-index:30;pointer-events:none;display:none;
+  text-align:center;letter-spacing:3px;
+  animation:flashIn .3s ease;
+}
+@keyframes flashIn{from{opacity:0;transform:translate(-50%,-50%) scale(.9)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+
+/* ═══ SIDEBAR ═══ */
+#sidebar{width:420px;min-width:420px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;height:100%;}
+.tabs{display:flex;background:#04040a;border-bottom:1px solid var(--border);flex-shrink:0;padding-top:2px;}
+.tab-btn{flex:1;padding:13px 6px;border:none;background:none;color:#2e2c38;cursor:pointer;font-family:'Cinzel',serif;font-size:8px;letter-spacing:1.5px;text-transform:uppercase;transition:.2s;}
+.tab-btn.active{color:var(--gold);border-bottom:1px solid var(--gold2);}
+.tab-btn:hover:not(.active){color:#555;}
+
+#content-area{flex-grow:1;overflow-y:auto;background:#06060e;}
+#content-area::-webkit-scrollbar{width:2px;}
+#content-area::-webkit-scrollbar-thumb{background:#14121a;}
+
+#chat-window,#news-window,#eco-window,#history-window{padding:10px;display:flex;flex-direction:column;gap:7px;}
+#news-window,#eco-window,#history-window{display:none;}
+
+/* ═══ MESSAGES ═══ */
+.msg{
+  padding:12px 14px;border-radius:1px;font-size:13px;
+  background:#09090f;border-left:2px solid #1a1a24;
+  line-height:1.7;animation:msgIn .3s ease;
+  position:relative;
+}
+.msg::before{
+  content:'';position:absolute;top:0;right:0;
+  width:40px;height:100%;
+  background:linear-gradient(270deg,rgba(255,255,255,.015),transparent);
+  pointer-events:none;
+}
+@keyframes msgIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+.msg .author{
+  font-family:'Cinzel',serif;font-size:8px;font-weight:700;
+  margin-bottom:5px;display:flex;align-items:center;gap:6px;
+  letter-spacing:1.5px;text-transform:uppercase;
+}
+.msg .ruler-tag{
+  font-size:7px;padding:1px 6px;border-radius:8px;
+  opacity:.7;letter-spacing:.5px;font-style:normal;
+}
+.msg.player{background:#0c0e09;border-left-color:var(--gold);}
+.msg.player2{background:#090c0e;border-left-color:#3355aa;}
+.msg.system{border-left-color:#1a1a24;color:#2e2c38;font-style:italic;text-align:center;font-size:10px;padding:8px;}
+.msg.bot-action{background:#0c0a09;border-left-color:var(--accent);}
+
+/* ═══ DECLARATION CARD (special for diplomacy) ═══ */
+.decl-card{
+  margin:4px 0;padding:14px 16px;
+  background:linear-gradient(135deg,#0c0a08,#09080c);
+  border:1px solid #1e1a14;border-top:2px solid var(--gold2);
+  font-size:12px;line-height:1.8;
+  position:relative;
+}
+.decl-card::before{
+  content:'"';position:absolute;top:6px;left:10px;
+  font-family:'Cinzel Decorative',serif;font-size:40px;
+  color:rgba(192,148,48,.1);line-height:1;pointer-events:none;
+}
+.decl-ruler{
+  font-family:'Cinzel',serif;font-size:9px;letter-spacing:2px;
+  margin-bottom:8px;display:flex;align-items:center;gap:8px;
+}
+.decl-seal{
+  width:8px;height:8px;border-radius:50%;
+  border:1px solid currentColor;opacity:.7;
+}
+
+/* ═══ NEWS ═══ */
+.news-card{padding:12px 14px;border-left:2px solid var(--accent);background:#09090e;border-bottom:1px solid #0e0e14;}
+.news-tag{font-family:'Cinzel',serif;font-size:8px;color:var(--accent);letter-spacing:2px;margin-bottom:5px;display:flex;justify-content:space-between;}
+.news-headline{font-size:13px;font-weight:600;margin-bottom:4px;color:#c8bfa8;line-height:1.5;}
+.news-body{font-size:11px;color:#444;line-height:1.6;font-style:italic;}
+
+/* ═══ ECO ═══ */
+.eco-block{background:#09090e;border:1px solid #12121a;padding:12px 14px;margin-bottom:7px;}
+.eco-title{font-family:'Cinzel',serif;font-size:8px;letter-spacing:2px;margin-bottom:8px;text-transform:uppercase;}
+.eco-row{display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;color:#444;}
+.eco-row b{color:#888;}
+.eco-pos{color:#3a7a45!important;}
+.eco-neg{color:#8a2222!important;}
+.rel-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px;}
+.rel-chip{font-size:9px;padding:4px 8px;border:1px solid #1a1a1a;display:flex;align-items:center;gap:4px;font-family:'Cinzel',serif;letter-spacing:.5px;}
+.rel-war{border-color:#5a1010;color:#aa3333;background:#0c0808;}
+.rel-ally{border-color:#14305a;color:#3366aa;background:#080810;}
+.rel-peace{border-color:#143a20;color:#338855;background:#080e09;}
+.rel-neutral{border-color:#14141a;color:#333;}
+.tx-list{margin-top:8px;border-top:1px solid #0e0e14;padding-top:8px;display:flex;flex-direction:column;gap:3px;max-height:120px;overflow-y:auto;}
+.tx-row{display:flex;gap:6px;font-size:10px;align-items:center;}
+.tx-t{color:#222;flex-shrink:0;}
+
+/* ═══ HISTORY ═══ */
+.hist-entry{padding:9px 12px;background:#09090e;border-left:2px solid #14121a;font-size:11px;color:#3a3840;line-height:1.6;font-style:italic;}
+.hist-entry b{color:#555;}
+.hist-turn{font-family:'Cinzel',serif;font-size:8px;color:#222;letter-spacing:1px;margin-bottom:2px;}
+
+/* ═══ INPUT ═══ */
+#input-area{background:#04040a;padding:14px;border-top:1px solid var(--border);flex-shrink:0;}
+.input-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.input-who{font-family:'Cinzel',serif;font-size:8px;letter-spacing:2px;color:#2a2828;text-transform:uppercase;}
+.input-who span{color:var(--gold2);}
+#hints{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;}
+.hint{padding:3px 9px;font-size:10px;background:#09090e;border:1px solid #14121a;color:#333;border-radius:1px;cursor:pointer;font-family:'Cinzel',serif;letter-spacing:.5px;transition:.15s;}
+.hint:hover{background:#100f14;color:#666;border-color:#222;}
+.input-row{display:flex;gap:7px;}
+#user-in{
+  flex:1;background:#09090e;border:1px solid #14121a;
+  color:#c8bfa8;padding:11px 14px;border-radius:1px;
+  font-size:13px;font-family:'IM Fell English',serif;
+  outline:none;transition:border-color .2s;
+}
+#user-in:focus{border-color:#2a2520;}
+#user-in::placeholder{color:#1e1c1a;font-style:italic;}
+#send-btn{
+  background:var(--accent);color:#f0e8d8;border:none;padding:0 20px;
+  border-radius:1px;cursor:pointer;font-family:'Cinzel',serif;font-size:8px;
+  letter-spacing:2px;transition:.2s;text-transform:uppercase;
+  border-top:1px solid rgba(255,255,255,.1);
+}
+#send-btn:hover:not(:disabled){background:#b03015;}
+#send-btn:disabled{opacity:.2;cursor:not-allowed;}
+
+/* ═══ THINKING ═══ */
+#thinking{display:none;padding:10px 14px;font-family:'Cinzel',serif;font-size:9px;letter-spacing:2px;color:#333;text-align:center;font-style:normal;border-top:1px solid #0e0e14;}
+
+/* ═══ TURN OVERLAY ═══ */
+#turn-overlay{
+  position:absolute;inset:0;background:rgba(0,0,0,.75);z-index:50;
+  display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;
+  backdrop-filter:blur(2px);
+}
+#turn-overlay.show{display:flex;}
+.turn-overlay-text{
+  font-family:'Cinzel Decorative',serif;font-size:18px;
+  color:#333;letter-spacing:4px;
+}
+.turn-overlay-sub{font-size:11px;color:#222;font-style:italic;letter-spacing:2px;}
+.turn-waiting{display:flex;gap:6px;margin-top:4px;}
+.tw-dot{width:5px;height:5px;border-radius:50%;background:#2a2a2a;animation:twDot 1.4s ease-in-out infinite;}
+.tw-dot:nth-child(2){animation-delay:.2s;}
+.tw-dot:nth-child(3){animation-delay:.4s;}
+@keyframes twDot{0%,80%,100%{transform:scale(.5);opacity:.3}40%{transform:scale(1);opacity:1}}
+
+/* ═══ SCROLLBAR ═══ */
+::-webkit-scrollbar{width:3px;height:3px;}
+::-webkit-scrollbar-thumb{background:#14121a;}
+</style>
+</head>
+<body>
+
+<!-- ═══ LOBBY ═══ -->
+<div id="lobby">
+  <div class="lobby-ornament">✦ &nbsp; ✦ &nbsp; ✦</div>
+  <div class="lobby-title">PAX</div>
+  <div class="lobby-sub">Игра держав и правителей</div>
+  <div class="lobby-sep"></div>
+
+  <!-- SETUP (первый экран) -->
+  <div id="screen-setup" class="lobby-card">
+    <div class="lc-title">Ваш трон</div>
+    <input class="lobby-input" id="ruler-name-in" placeholder="Имя вашего правителя..." maxlength="24" autocomplete="off">
+    <input class="lobby-input" id="realm-name-in" placeholder="Название вашей державы..." maxlength="22" autocomplete="off">
+    <div class="lobby-divider">режим игры</div>
+    <button class="lobby-btn" onclick="startSolo()">⚔ Играть одному (vs ИИ)</button>
+    <button class="lobby-btn secondary" onclick="goMulti()">⚡ Мультиплеер (2 игрока)</button>
+    <div id="lobby-status">Вы будете управлять красной державой</div>
+  </div>
+
+  <!-- MULTI CHOICE -->
+  <div id="screen-multi" class="lobby-card" style="display:none;">
+    <div class="lc-title">Мультиплеер</div>
+    <button class="lobby-btn" onclick="hostGame()">👑 Создать комнату</button>
+    <button class="lobby-btn secondary" style="margin-top:10px;" onclick="goJoin()">🚪 Войти в комнату</button>
+    <button class="lobby-btn secondary" onclick="backToSetup()">← Назад</button>
+    <div id="lobby-status2" style="font-size:12px;color:#555;text-align:center;margin-top:14px;font-style:italic;min-height:18px;"></div>
+  </div>
+
+  <!-- HOST WAITING -->
+  <div id="screen-waiting" class="lobby-card" style="display:none;">
+    <div class="lc-title">Ожидание противника</div>
+    <div class="room-code-display">
+      <div class="code" id="room-code-show">----</div>
+      <div class="hint">Дайте этот код другому игроку</div>
+    </div>
+    <div style="text-align:center;color:#444;font-size:12px;font-style:italic;">
+      Ожидаем второго правителя<span class="waiting-dot">.</span><span class="waiting-dot">.</span><span class="waiting-dot">.</span>
+    </div>
+    <button class="lobby-btn secondary" style="margin-top:16px;" onclick="cancelHost()">✕ Отмена</button>
+  </div>
+
+  <!-- JOIN -->
+  <div id="screen-join" class="lobby-card" style="display:none;">
+    <div class="lc-title">Войти в игру</div>
+    <input class="lobby-input" id="join-code-in" placeholder="Код комнаты (4 символа)..." maxlength="4" autocomplete="off" style="text-align:center;font-family:'Cinzel',serif;font-size:24px;letter-spacing:8px;text-transform:uppercase;">
+    <button class="lobby-btn" onclick="joinGame()">Войти</button>
+    <button class="lobby-btn secondary" onclick="backToMulti()">← Назад</button>
+    <div id="lobby-status3" style="font-size:12px;color:#555;text-align:center;margin-top:14px;font-style:italic;min-height:18px;"></div>
+  </div>
+</div>
+
+<!-- ═══ MAIN GAME ═══ -->
+<div id="main" style="display:none;">
+  <div id="viewport">
+    <canvas id="map"></canvas>
+
+    <!-- Throne bar -->
+    <div id="throne-bar">
+      <div class="throne-left">
+        <div class="throne-emblem">PAX · МИРОВОЙ ДВИЖОК</div>
+        <div style="width:1px;height:20px;background:#14120a;"></div>
+        <div>
+          <div style="display:flex;align-items:baseline;gap:6px;">
+            <div class="throne-ruler-name" id="my-ruler-display">—</div>
+            <div class="throne-title" id="my-title-display"></div>
+          </div>
+          <div style="font-size:9px;color:#2a2820;font-style:italic;" id="my-realm-display"></div>
+        </div>
+      </div>
+      <div class="throne-right">
+        <div class="throne-turn" id="turn-bar-text">Ход <span id="turn-num">1</span></div>
+        <div id="my-gold-display" style="font-family:'Cinzel',serif;font-size:11px;color:var(--gold);"></div>
+      </div>
+    </div>
+
+    <!-- MP bar -->
+    <div id="mp-bar">
+      <div class="mp-player" id="mp-p1">
+        <div class="mp-dot" id="mp-dot-1"></div>
+        <span id="mp-name-1" style="font-size:8px;letter-spacing:1px;"></span>
+      </div>
+      <div class="mp-player" style="color:#444;" id="mp-p2">
+        <div class="mp-dot" id="mp-dot-2" style="background:#1a1a2a;"></div>
+        <span id="mp-name-2" style="font-size:8px;letter-spacing:1px;color:#1e1e2a;">VS</span>
+      </div>
+      <div class="mp-turn-badge theirs" id="mp-turn-badge">ХОД ПРОТИВНИКА</div>
+    </div>
+
+    <div id="hud">
+      <div id="hud-title">ВЕЛИКИЕ ДЕРЖАВЫ</div>
+      <div id="faction-stats"></div>
+    </div>
+    <div id="income-tick"></div>
+    <div id="tooltip"></div>
+    <div id="event-flash"></div>
+
+    <!-- Turn overlay (when waiting for opponent) -->
+    <div id="turn-overlay">
+      <div class="turn-overlay-text">ХОД ПРОТИВНИКА</div>
+      <div class="turn-overlay-sub">Ожидаем решения правителя...</div>
+      <div class="turn-waiting">
+        <div class="tw-dot"></div>
+        <div class="tw-dot"></div>
+        <div class="tw-dot"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="tabs">
+      <button class="tab-btn active" id="btn-chat" onclick="showTab('chat')">Двор</button>
+      <button class="tab-btn" id="btn-news" onclick="showTab('news')">Глашатай</button>
+      <button class="tab-btn" id="btn-eco" onclick="showTab('eco')">Казна</button>
+      <button class="tab-btn" id="btn-history" onclick="showTab('history')">Летопись</button>
+    </div>
+    <div id="content-area">
+      <div id="chat-window"></div>
+      <div id="news-window"></div>
+      <div id="eco-window"></div>
+      <div id="history-window"></div>
+    </div>
+    <div id="thinking">Оракул размышляет...</div>
+    <div id="input-area">
+      <div class="input-header">
+        <div class="input-who">Указ от лица: <span id="input-from-name">—</span></div>
+        <div style="font-size:9px;color:#1e1c1a;font-family:'Cinzel',serif;">⚡ Enter — послать</div>
+      </div>
+      <div id="hints"></div>
+      <div class="input-row">
+        <input type="text" id="user-in" placeholder="Ваш указ, посыл или действие..." autocomplete="off">
+        <button id="send-btn">Послать</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+//  FIREBASE CONFIG — используем публичный анонимный проект для простоты
+//  Можно заменить на свой проект firebase
+// ═══════════════════════════════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyC4Q3oJb-j3W5MvBKuOJXOFuZn6q35bKXY",
+  authDomain: "pax-game-mp.firebaseapp.com",
+  databaseURL: "https://pax-game-mp-default-rtdb.firebaseio.com",
+  projectId: "pax-game-mp",
+  storageBucket: "pax-game-mp.appspot.com",
+};
+
+let fbApp, fbDb;
+try {
+  fbApp = firebase.initializeApp(firebaseConfig);
+  fbDb = firebase.database();
+} catch(e) {
+  console.warn('Firebase init failed, solo only:', e);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GAME CONFIG
+// ═══════════════════════════════════════════════════════════════════════════════
+const API_KEY = "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";
+const canvas = document.getElementById('map');
+const ctx = canvas.getContext('2d');
+const CELL = 14;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RULER NAMES & PERSONALITIES
+// ═══════════════════════════════════════════════════════════════════════════════
+const RULER_NAMES = ["Моракан","Зерхаль","Ивельда","Торвус","Сигред","Оттавар","Лирейна","Крассул","Дворим","Фаэльна","Ундрак","Сельвор","Морнис","Грифталь","Этанос","Варкул","Иссора","Бренхар"];
+function randName(){return RULER_NAMES.splice(Math.floor(Math.random()*RULER_NAMES.length),1)[0]||"Безымянный";}
+
+const PERSONALITIES = [
+  {archetype:"ТИРАН",emoji:"🗡️",voice:"Говорит кратко, с угрозой и презрением. Никогда не просит — только приказывает. Называет других правителей «щенками» и «червями».",agenda:"Завоевать всех. Объявляет войну при любом поводе. Не признаёт мира."},
+  {archetype:"ТОРГОВЕЦ",emoji:"💰",voice:"Оценивает всё в золоте. Всегда торгуется. Может продать союзника. Говорит через цифры и выгоду.",agenda:"Накопить максимум золота. Торгует территориями, нейтралитетом, информацией."},
+  {archetype:"ДИПЛОМАТ",emoji:"🕊️",voice:"Говорит вежливо и витиевато. Предпочитает слова мечу. Ищет взаимовыгодное решение. Цитирует мудрецов.",agenda:"Создать сеть союзов. Стравливать других. Нападать только в коалиции."},
+  {archetype:"ПАРАНОИК",emoji:"👁️",voice:"Говорит намёками, с подозрением. Упоминает своих шпионов. Недоверчив даже к союзникам. Всегда видит скрытые мотивы.",agenda:"Оборона и слежка. Копить силу в тайне. Атаковать только при абсолютном перевесе."},
+  {archetype:"АВАНТЮРИСТ",emoji:"🎲",voice:"Говорит энергично и непредсказуемо. Принимает безумные решения ради веселья. Называет войну «игрой».",agenda:"Творить хаос. Атакует союзника или мирится с врагом без причины."},
+  {archetype:"МУДРЕЦ",emoji:"📜",voice:"Говорит медленно и с достоинством. Использует притчи и исторические аналогии. Не торопится с решениями.",agenda:"Долгосрочная стратегия. Ждёт ошибок врагов. Бьёт в момент слабости."},
+  {archetype:"БЕРСЕРК",emoji:"⚡",voice:"Говорит грубо и коротко. Мало слов — много действий. Не знает слова «мир». Оскорбляет всех напрямую.",agenda:"Вечная война. Захватывать силой. Считает дипломатию трусостью."},
+  {archetype:"ИНТРИГАН",emoji:"🕸️",voice:"Говорит двусмысленно. Плетёт интриги. Никогда не говорит прямо. Намекает на тайные союзы.",agenda:"Манипулировать всеми. Разжигать конфликты между другими."},
+  {archetype:"ТРУС",emoji:"🐇",voice:"Говорит испуганно и извиняющимся тоном. Сразу соглашается и тут же сожалеет. Боится всех.",agenda:"Выжить любой ценой. Сдаётся сильным. Кусает только слабых."}
+];
+function pickPersonality(used){const avail=PERSONALITIES.filter(p=>!used.has(p.archetype));const pool=avail.length?avail:PERSONALITIES;return pool[Math.floor(Math.random()*pool.length)];}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MULTIPLAYER STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+let isMultiplayer = false;
+let myPlayerId = null;   // 1 or 2
+let roomCode = null;
+let roomRef = null;
+let myTurn = true;       // In solo always true; in MP alternates
+let gameStarted = false;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GAME STATE
+// ═══════════════════════════════════════════════════════════════════════════════
+let cells=[], cols=0, rows=0, animQueue=[], turnNum=1, chatHistory=[], txLog=[], histLog=[];
+let kingdoms = {
+  1:{name:"ПУРПУРНЫЕ", color:"#993322",gold:1000,title:"Правитель",relations:{},personality:null,ruler:"",income:3},
+  2:{name:"ЛАЗУРНЫЕ",  color:"#223399",gold:1000,title:"Правитель",relations:{},personality:null,ruler:"",income:3},
+  3:{name:"ИЗУМРУДНЫЕ",color:"#227744",gold:1000,title:"Вождь",    relations:{},personality:null,ruler:"",income:3},
+  4:{name:"ЗОЛОТЫЕ",   color:"#996622",gold:2000,title:"Хаким",    relations:{},personality:null,ruler:"",income:4}
+};
+
+// ─── Player setup ──────────────────────────────────────────────────────────────
+let myRulerName="", myRealmName="";
+let p2RulerName="", p2RealmName="";
+
+function getMyKingdomId(){ return myPlayerId===2 ? 2 : 1; }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  LOBBY LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+function getInputs(){
+  myRulerName = document.getElementById('ruler-name-in').value.trim() || "Безымянный";
+  myRealmName = document.getElementById('realm-name-in').value.trim() || "Безымянная держава";
+}
+
+function startSolo(){
+  getInputs();
+  isMultiplayer = false;
+  myPlayerId = 1;
+  myTurn = true;
+  kingdoms[1].ruler = myRulerName;
+  kingdoms[1].name = myRealmName.toUpperCase().slice(0,16);
+  document.getElementById('lobby').style.display='none';
+  document.getElementById('main').style.display='flex';
+  initGame();
+}
+
+function goMulti(){
+  getInputs();
+  document.getElementById('screen-setup').style.display='none';
+  document.getElementById('screen-multi').style.display='block';
+}
+function backToSetup(){
+  document.getElementById('screen-multi').style.display='none';
+  document.getElementById('screen-setup').style.display='block';
+}
+function goJoin(){
+  document.getElementById('screen-multi').style.display='none';
+  document.getElementById('screen-join').style.display='block';
+}
+function backToMulti(){
+  document.getElementById('screen-join').style.display='none';
+  document.getElementById('screen-multi').style.display='block';
+}
+
+function genRoomCode(){
+  const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join('');
+}
+
+async function hostGame(){
+  if(!fbDb){alert('Firebase недоступен. Попробуйте другой браузер.');return;}
+  getInputs();
+  roomCode = genRoomCode();
+  document.getElementById('screen-multi').style.display='none';
+  document.getElementById('screen-waiting').style.display='block';
+  document.getElementById('room-code-show').textContent = roomCode;
+
+  roomRef = fbDb.ref('rooms/'+roomCode);
+  // Init room
+  const initState = buildInitialState();
+  await roomRef.set({
+    host:{ruler:myRulerName,realm:myRealmName},
+    guest:null,
+    state: initState,
+    turn: 1,
+    whoseTurn: 1,
+    moves:[],
+    created: Date.now()
+  });
+
+  // Listen for guest
+  roomRef.child('guest').on('value', snap=>{
+    if(snap.val()){
+      const g = snap.val();
+      p2RulerName = g.ruler;
+      p2RealmName = g.realm;
+      myPlayerId = 1;
+      isMultiplayer = true;
+      startMultiGame(initState);
+    }
+  });
+
+  // Auto-cleanup after 10 min
+  setTimeout(()=>{if(!gameStarted)cancelHost();},600000);
+}
+
+async function joinGame(){
+  if(!fbDb){alert('Firebase недоступен.');return;}
+  getInputs();
+  const code = document.getElementById('join-code-in').value.trim().toUpperCase();
+  if(code.length!==4){document.getElementById('lobby-status3').textContent='Введите 4-символьный код';return;}
+
+  roomRef = fbDb.ref('rooms/'+code);
+  const snap = await roomRef.once('value');
+  if(!snap.val()){
+    document.getElementById('lobby-status3').textContent='Комната не найдена. Проверьте код.';
+    return;
+  }
+  const room = snap.val();
+  if(room.guest){
+    document.getElementById('lobby-status3').textContent='Комната уже занята.';
+    return;
+  }
+
+  roomCode = code;
+  p2RulerName = room.host.ruler;
+  p2RealmName = room.host.realm;
+  myPlayerId = 2;
+  isMultiplayer = true;
+
+  // Register as guest
+  await roomRef.child('guest').set({ruler:myRulerName,realm:myRealmName});
+
+  // Load state
+  const initState = room.state;
+  startMultiGame(initState);
+}
+
+function cancelHost(){
+  if(roomRef) roomRef.remove();
+  document.getElementById('screen-waiting').style.display='none';
+  document.getElementById('screen-multi').style.display='block';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MULTIPLAYER GAME START
+// ═══════════════════════════════════════════════════════════════════════════════
+function buildInitialState(){
+  // We'll store the random seed so both clients get same map
+  return { seed: Math.floor(Math.random()*999999) };
+}
+
+function startMultiGame(initState){
+  gameStarted = true;
+  // Set ruler names
+  const myId = myPlayerId;
+  const oppId = myPlayerId===1 ? 2 : 1;
+
+  kingdoms[myId].ruler = myRulerName;
+  kingdoms[myId].name  = myRealmName.toUpperCase().slice(0,16);
+  kingdoms[oppId].ruler = (myPlayerId===1)?p2RulerName:p2RulerName;
+  kingdoms[oppId].name  = (myPlayerId===1)?(p2RealmName.toUpperCase().slice(0,16)):(p2RealmName.toUpperCase().slice(0,16));
+
+  document.getElementById('lobby').style.display='none';
+  document.getElementById('main').style.display='flex';
+
+  initGame(initState.seed);
+
+  // Player 1 starts, player 2 waits
+  if(myPlayerId===2){
+    myTurn = false;
+    setTurnBlock(true);
+  } else {
+    myTurn = true;
+    setTurnBlock(false);
+  }
+
+  // Listen for opponent moves
+  listenForOpponentMove();
+}
+
+function listenForOpponentMove(){
+  if(!roomRef) return;
+  roomRef.child('moves').on('child_added', snap=>{
+    const move = snap.val();
+    if(!move) return;
+    if(move.by === myPlayerId) return; // Our own move, skip
+    if(move.processed) return;
+
+    // Apply opponent's move locally
+    applyOpponentMove(move);
+  });
+}
+
+function applyOpponentMove(move){
+  // The opponent sent their message & AI response to apply
+  if(move.aiResult){
+    const ai = move.aiResult;
+    applyGold(ai.gold_update);
+    applyRel(ai.relations_update);
+    execAction(ai.action);
+    if(ai.news) addNews(ai.news.title, ai.news.body);
+    // Show opponent message in chat
+    const oppId = myPlayerId===1?2:1;
+    addDeclMsg(oppId, move.userMsg, 'Противник говорит своим правителям...');
+    if(ai.reply) addMsg(ai.speaker_id, ai.reply);
+    if(ai.bot_action_desc) addMsg(ai.speaker_id,`<i style="color:#444;font-size:11px">${ai.bot_action_desc}</i>`,true);
+    if(ai.history_note) addHistory(ai.history_note);
+    const labels={conquest:'⚔️ Завоевание',exchange:'🔄 Обмен',spawn:'🌱 Новая сила',revolt:'⚡ Восстание',nuke:'💥 Удар',reinforce:'🛡️ Укрепление'};
+    if(ai.action&&labels[ai.action.type]) flashEvent(labels[ai.action.type]);
+    turnNum++;
+    updateUI();
+  }
+
+  // Mark as processed & give turn to me
+  snap && snap.ref && snap.ref.update({processed:true});
+  myTurn = true;
+  setTurnBlock(false);
+  addSystemMsg('⚡ Ваш ход, правитель.');
+}
+
+function setTurnBlock(block){
+  document.getElementById('turn-overlay').classList.toggle('show', block);
+  document.getElementById('send-btn').disabled = block;
+  document.getElementById('user-in').disabled = block;
+  const badge = document.getElementById('mp-turn-badge');
+  if(isMultiplayer){
+    badge.textContent = block ? 'ХОД ПРОТИВНИКА' : 'ВАШ ХОД';
+    badge.className = 'mp-turn-badge ' + (block?'theirs':'yours');
+  } else {
+    badge.style.display='none';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  GAME INIT
+// ═══════════════════════════════════════════════════════════════════════════════
+function seededRand(seed){
+  // Simple LCG for deterministic map
+  let s = seed;
+  return function(){
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+let rng = Math.random;
+
+function initGame(seed){
+  if(seed!==undefined) rng = seededRand(seed);
+  resize(); buildCells(); seedKingdoms();
+  for(let i=0;i<140;i++) grow();
+  initRelations(); assignPersonalities();
+  updateUI(); renderEco(); showIntro();
+  requestAnimationFrame(loop);
+  setInterval(passiveIncome, 45000);
+  updateMpBar();
+  updateThrone();
+  buildHints();
+  document.getElementById('user-in').focus();
+}
+
+function resize(){
+  canvas.width=canvas.parentElement.clientWidth;
+  canvas.height=canvas.parentElement.clientHeight;
+  cols=Math.floor(canvas.width/CELL);
+  rows=Math.floor(canvas.height/CELL);
+}
+function buildCells(){
+  cells=[];
+  for(let y=0;y<rows;y++) for(let x=0;x<cols;x++) cells.push({x,y,owner:null,glow:0,flashColor:null,flashA:0});
+}
+function idx(x,y){return y*cols+x;}
+function cell(x,y){return(x>=0&&x<cols&&y>=0&&y<rows)?cells[idx(x,y)]:null;}
+function nb4(c){return[cell(c.x-1,c.y),cell(c.x+1,c.y),cell(c.x,c.y-1),cell(c.x,c.y+1)].filter(Boolean);}
+
+function seedKingdoms(){
+  const pos=[
+    {x:Math.floor(cols*.12),y:Math.floor(rows*.12)},
+    {x:Math.floor(cols*.88),y:Math.floor(rows*.12)},
+    {x:Math.floor(cols*.12),y:Math.floor(rows*.88)},
+    {x:Math.floor(cols*.88),y:Math.floor(rows*.88)}
+  ];
+  [1,2,3,4].forEach((id,i)=>{const c=cell(pos[i].x,pos[i].y);if(c)c.owner=id;});
+}
+function grow(){
+  const next=cells.map(c=>c.owner);
+  const front=cells.filter(c=>c.owner).flatMap(c=>nb4(c).filter(n=>!n.owner));
+  front.sort(()=>rng()-.5).slice(0,Math.ceil(front.length*.65)).forEach(c=>{
+    const ow=nb4(c).filter(n=>n.owner);if(ow.length)next[idx(c.x,c.y)]=ow[Math.floor(rng()*ow.length)].owner;
+  });
+  cells.forEach((c,i)=>c.owner=next[i]);
+}
+function initRelations(){
+  const ids=Object.keys(kingdoms).map(Number);
+  ids.forEach(a=>ids.forEach(b=>{if(a!==b)kingdoms[a].relations[b]='neutral';}));
+}
+function assignPersonalities(){
+  const used=new Set();
+  Object.keys(kingdoms).forEach(id=>{
+    // Don't overwrite human players
+    if(isMultiplayer&&(parseInt(id)===1||parseInt(id)===2)){
+      kingdoms[id].personality={archetype:"ПРАВИТЕЛЬ",emoji:"👑",voice:"Живой игрок.",agenda:"Победить противника."};
+      if(!kingdoms[id].ruler) kingdoms[id].ruler=randName();
+      return;
+    }
+    if(!isMultiplayer&&parseInt(id)===1){
+      kingdoms[id].personality={archetype:"ПРАВИТЕЛЬ",emoji:"👑",voice:"",agenda:""};
+      if(!kingdoms[id].ruler) kingdoms[id].ruler=myRulerName||randName();
+      return;
+    }
+    const p=pickPersonality(used);used.add(p.archetype);
+    kingdoms[id].personality=p;
+    if(!kingdoms[id].ruler) kingdoms[id].ruler=randName();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════════════════════════
+function loop(){
+  ctx.fillStyle="#030304";ctx.fillRect(0,0,canvas.width,canvas.height);
+  cells.forEach(c=>{
+    if(!c.owner||!kingdoms[c.owner])return;
+    ctx.fillStyle=kingdoms[c.owner].color;
+    ctx.fillRect(c.x*CELL,c.y*CELL,CELL,CELL);
+    if(c.glow>0){ctx.fillStyle=`rgba(255,255,255,${c.glow*.6})`;ctx.fillRect(c.x*CELL,c.y*CELL,CELL,CELL);c.glow=Math.max(0,c.glow-.025);}
+    if(c.flashA>0){ctx.fillStyle=c.flashColor.replace('__',c.flashA.toFixed(2));ctx.fillRect(c.x*CELL,c.y*CELL,CELL,CELL);c.flashA=Math.max(0,c.flashA-.02);}
+  });
+  ctx.strokeStyle='rgba(0,0,0,.5)';ctx.lineWidth=1;
+  cells.forEach(c=>{
+    if(!c.owner)return;
+    const r=cell(c.x+1,c.y),d=cell(c.x,c.y+1);
+    if(r&&r.owner!==c.owner){ctx.beginPath();ctx.moveTo((c.x+1)*CELL,c.y*CELL);ctx.lineTo((c.x+1)*CELL,(c.y+1)*CELL);ctx.stroke();}
+    if(d&&d.owner!==c.owner){ctx.beginPath();ctx.moveTo(c.x*CELL,(c.y+1)*CELL);ctx.lineTo((c.x+1)*CELL,(c.y+1)*CELL);ctx.stroke();}
+  });
+  for(let i=0;i<7;i++) if(animQueue.length){const t=animQueue.shift();t.cell.owner=t.to;t.cell.glow=1.0;}
+  requestAnimationFrame(loop);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TERRITORY HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+function borderCells(ownId,targId){return cells.filter(c=>c.owner===ownId&&nb4(c).some(n=>n.owner===targId));}
+function bfsChunk(seed,ownId,count){
+  const vis=new Set(),q=[seed],res=[];vis.add(idx(seed.x,seed.y));
+  while(q.length&&res.length<count){
+    const cur=q.shift();res.push(cur);
+    nb4(cur).filter(n=>n.owner===ownId&&!vis.has(idx(n.x,n.y))).sort(()=>rng()-.5).forEach(n=>{vis.add(idx(n.x,n.y));q.push(n);});
+  }
+  return res;
+}
+function contigChunk(ownId,targId,count){
+  const bc=borderCells(ownId,targId);
+  const pool=bc.length?bc:cells.filter(c=>c.owner===ownId);
+  const seed=pool[Math.floor(rng()*pool.length)];
+  return seed?bfsChunk(seed,ownId,count):[];
+}
+function contigAny(ownId,count){
+  const owned=cells.filter(c=>c.owner===ownId);
+  if(!owned.length)return[];
+  return bfsChunk(owned[Math.floor(rng()*owned.length)],ownId,count);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ACTION EXECUTOR
+// ═══════════════════════════════════════════════════════════════════════════════
+function execAction(action){
+  if(!action||action.type==='none')return;
+  const{type,from,to,count,new_faction:nf}=action;
+  const cnt=count||20;
+
+  if(type==='conquest'){
+    const chunk=contigChunk(from,to,Math.min(cnt,cells.filter(c=>c.owner===from).length));
+    chunk.forEach(c=>{animQueue.push({cell:c,to});c.flashColor='rgba(220,50,50,__)';c.flashA=.7;});
+  }
+  else if(type==='exchange'){
+    const ca=contigChunk(from,to,Math.min(cnt,cells.filter(c=>c.owner===from).length));
+    const cb=contigChunk(to,from,Math.min(cnt,cells.filter(c=>c.owner===to).length));
+    ca.forEach(c=>{animQueue.push({cell:c,to});c.flashColor='rgba(255,200,0,__)';c.flashA=1;});
+    cb.forEach(c=>{animQueue.push({cell:c,to:from});c.flashColor='rgba(255,200,0,__)';c.flashA=1;});
+  }
+  else if(type==='spawn'||type==='revolt'){
+    if(nf){
+      kingdoms[nf.id]={name:nf.name,color:nf.color,gold:nf.gold||400,title:nf.title||'Лидер',relations:{},personality:pickPersonality(new Set()),ruler:randName(),income:2};
+      Object.keys(kingdoms).forEach(eid=>{
+        const e=parseInt(eid);if(e!==nf.id){
+          kingdoms[nf.id].relations[e]=type==='revolt'?'war':'neutral';
+          kingdoms[e].relations[nf.id]=type==='revolt'?'war':'neutral';
+        }
+      });
+    }
+    const toId=nf?nf.id:to;
+    const chunk=contigAny(from,cnt);
+    chunk.forEach(c=>{animQueue.push({cell:c,to:toId});c.flashColor=type==='revolt'?'rgba(255,50,50,__)':'rgba(200,255,150,__)';c.flashA=1;});
+  }
+  else if(type==='nuke'||type==='destroy'){
+    const chunk=contigAny(from,Math.min(cnt,cells.filter(c=>c.owner===from).length));
+    chunk.forEach(c=>{animQueue.push({cell:c,to:null});c.flashColor='rgba(255,220,80,__)';c.flashA=1;});
+  }
+  else if(type==='reinforce'){
+    const ownId=from||to;
+    contigAny(ownId,cnt).forEach(c=>{c.flashColor='rgba(80,160,255,__)';c.flashA=0.7;});
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ECONOMY
+// ═══════════════════════════════════════════════════════════════════════════════
+function applyGold(upd){
+  if(!upd)return;
+  Object.entries(upd).forEach(([id,d])=>{
+    const k=kingdoms[id];if(!k)return;
+    const before=k.gold;k.gold=Math.max(0,k.gold+d);
+    const actual=k.gold-before;
+    if(actual!==0)txLog.unshift({turn:turnNum,name:k.name,color:k.color,amt:actual});
+  });
+  if(txLog.length>60)txLog=txLog.slice(0,60);
+}
+function applyRel(upd){
+  if(!upd)return;
+  Object.entries(upd).forEach(([pair,status])=>{
+    const[a,b]=pair.split('-').map(Number);
+    if(kingdoms[a]&&kingdoms[b]){kingdoms[a].relations[b]=status;kingdoms[b].relations[a]=status;}
+  });
+}
+function passiveIncome(){
+  Object.entries(kingdoms).forEach(([id,k])=>{
+    const territory=cells.filter(c=>c.owner==id).length;
+    const inc=Math.floor(territory*0.15)+k.income*10;
+    k.gold+=inc;
+    showTick(`+${inc}💰 ${k.name}`,k.color);
+  });
+  txLog.unshift({turn:turnNum,name:'ДОХОД',color:'#3a7a45',amt:'(пассивный доход)'});
+  updateUI();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  UI HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+function showTick(text,color){
+  const el=document.createElement('div');
+  el.className='tick-item';el.textContent=text;el.style.color=color;
+  document.getElementById('income-tick').appendChild(el);
+  setTimeout(()=>el.remove(),2600);
+}
+function flashEvent(text){
+  const el=document.getElementById('event-flash');
+  el.textContent=text;el.style.display='block';
+  setTimeout(()=>el.style.display='none',2200);
+}
+function setHint(t){const i=document.getElementById('user-in');i.value=t;i.focus();i.setSelectionRange(t.length,t.length);}
+function showTab(t){
+  ['chat','news','eco','history'].forEach(tab=>{
+    document.getElementById(tab+'-window').style.display=tab===t?'flex':'none';
+    document.getElementById('btn-'+tab).classList.toggle('active',tab===t);
+  });
+}
+
+function updateThrone(){
+  const myId = getMyKingdomId();
+  const k = kingdoms[myId]||{};
+  const p = k.personality||{};
+  document.getElementById('my-ruler-display').textContent = k.ruler||myRulerName||'—';
+  document.getElementById('my-title-display').textContent = k.title||'';
+  document.getElementById('my-realm-display').textContent = k.name||myRealmName||'';
+  document.getElementById('my-gold-display').textContent = `${k.gold||0} ⚜`;
+  document.getElementById('input-from-name').textContent = `${p.emoji||'👑'} ${k.ruler||''}`;
+}
+
+function updateMpBar(){
+  const k1 = kingdoms[1]||{}, k2 = kingdoms[2]||{};
+  document.getElementById('mp-dot-1').style.background = k1.color||'#993322';
+  document.getElementById('mp-name-1').textContent = `${k1.name||''} · ${k1.ruler||''}`;
+  document.getElementById('mp-dot-2').style.background = k2.color||'#223399';
+  document.getElementById('mp-name-2').textContent = `${k2.name||''} · ${k2.ruler||''}`;
+
+  const p1 = document.getElementById('mp-p1');
+  const p2 = document.getElementById('mp-p2');
+  if(isMultiplayer){
+    if(myPlayerId===1){p1.classList.add('active');p1.style.color=k1.color;}
+    else{p2.classList.add('active');p2.style.color=k2.color;}
+  } else {
+    p1.classList.add('active');p1.style.color=k1.color;
+    document.getElementById('mp-turn-badge').style.display='none';
+  }
+}
+
+function buildHints(){
+  const hints = [
+    ['🕊️ Мир','Предлагаю мир и торговый союз с '],
+    ['⚔️ Война','Объявляю войну '],
+    ['🤝 Союз','Заключаю союз с '],
+    ['🔄 Обмен','Предлагаю обмен территориями с '],
+    ['💰 Дань','Требую 300 золота с '],
+    ['⚡ Восстание','Финансирую восстание внутри '],
+    ['🗡️ Захват','Атакую и захватываю территорию '],
+    ['👁️ Шпион','Шпионю за '],
+    ['☢️ Ядерка','Угрожаю ядерным ударом '],
+    ['💬 Речь','Обращаюсь ко всем правителям с речью:'],
+  ];
+  const div = document.getElementById('hints');
+  div.innerHTML = hints.map(([label,val])=>
+    `<span class="hint" onclick="setHint('${val}')">${label}</span>`
+  ).join('');
+}
+
+function updateUI(){
+  let html='';
+  const myId = getMyKingdomId();
+  Object.entries(kingdoms).forEach(([id,k])=>{
+    const cnt=cells.filter(c=>c.owner==id).length;
+    const km=Math.round(cnt*CELL*CELL/10000);
+    const p=k.personality||{};
+    const warWith=Object.entries(k.relations||{}).filter(([,r])=>r==='war').map(([rid])=>kingdoms[rid]?.name).filter(Boolean);
+    const isMe=(parseInt(id)===myId)||(!isMultiplayer&&parseInt(id)===1);
+    const youBadge=isMe?`<span class="f-you">вы</span>`:'';
+    html+=`<div class="f-row">
+      <div class="f-dot" style="background:${k.color}"></div>
+      <div class="f-name" style="color:${k.color}">${p.emoji||''} ${k.name} ${youBadge}</div>
+      <div class="f-stat">${km}км²</div>
+    </div>
+    <div class="f-arch">${k.ruler||''} · ${p.archetype||''} · <span style="color:var(--gold)">${k.gold}⚜</span>${warWith.length?' · ⚔️'+warWith.join(','):''}</div>`;
+  });
+  document.getElementById('faction-stats').innerHTML=html;
+  document.getElementById('turn-num').textContent=turnNum;
+  updateThrone();
+  updateMpBar();
+  renderEco();
+}
+
+function renderEco(){
+  const win=document.getElementById('eco-window');let html='';
+  Object.entries(kingdoms).forEach(([id,k])=>{
+    const p=k.personality||{};
+    const cnt=cells.filter(c=>c.owner==id).length;
+    const inc=Math.floor(cnt*.15+k.income*10);
+    const cls=k.gold>=500?'eco-pos':k.gold<100?'eco-neg':'';
+    html+=`<div class="eco-block">
+      <div class="eco-title" style="color:${k.color}">${p.emoji||''} ${k.name} — ${k.ruler}</div>
+      <div style="font-size:10px;color:#2a2a30;margin-bottom:6px;font-style:italic">${p.archetype||''}</div>
+      <div class="eco-row"><span>Казна</span><b class="${cls}">${k.gold} ⚜</b></div>
+      <div class="eco-row"><span>Доход</span><b class="eco-pos">+${inc}/ход</b></div>
+      <div class="eco-row"><span>Территория</span><b>${cnt} клеток</b></div>
+    </div>`;
+  });
+  html+=`<div class="eco-block"><div class="eco-title">ДИПЛОМАТИЯ</div><div class="rel-grid">`;
+  const ids=Object.keys(kingdoms).map(Number);
+  ids.forEach(a=>ids.forEach(b=>{
+    if(a>=b)return;
+    const rel=(kingdoms[a].relations||{})[b]||'neutral';
+    const cls='rel-'+rel,icon=rel==='war'?'⚔️':rel==='ally'?'🤝':rel==='peace'?'🕊️':'—';
+    html+=`<div class="rel-chip ${cls}">${icon} <span style="color:${kingdoms[a].color}">${kingdoms[a].name}</span>/<span style="color:${kingdoms[b].color}">${kingdoms[b].name}</span></div>`;
+  }));
+  html+=`</div></div>`;
+  if(txLog.length){
+    html+=`<div class="eco-block"><div class="eco-title">ТРАНЗАКЦИИ</div><div class="tx-list">`;
+    txLog.slice(0,25).forEach(tx=>{
+      const sign=typeof tx.amt==='number'&&tx.amt>0?'+':'';
+      const col=typeof tx.amt==='number'?(tx.amt>0?'#3a7a45':'#8a3333'):'#333';
+      html+=`<div class="tx-row"><span class="tx-t">Ход ${tx.turn}</span><span style="color:${tx.color}">${tx.name}</span><span style="color:${col};margin-left:auto">${sign}${tx.amt}</span></div>`;
+    });
+    html+=`</div></div>`;
+  }
+  win.innerHTML=html;
+}
+
+function addMsg(id,text,isBotAction){
+  const win=document.getElementById('chat-window');
+  const k=kingdoms[id]||{name:'Глашатай',color:'#555',title:'Вестник',ruler:'',personality:{}};
+  const p=k.personality||{};
+  const myId=getMyKingdomId();
+  const isMe=parseInt(id)===myId&&!isBotAction;
+  const d=document.createElement('div');
+  d.className='msg'+(isMe?' player':isBotAction?' bot-action':parseInt(id)===2&&isMultiplayer&&myPlayerId===1?' player2':'');
+  d.style.borderLeftColor=k.color;
+  d.innerHTML=`<div class="author" style="color:${k.color}">${p.emoji||''} ${k.title||''} ${k.name}<span class="ruler-tag" style="background:${k.color}18;color:${k.color}88">${k.ruler||''} · ${p.archetype||''}</span></div>${text}`;
+  win.appendChild(d);
+  win.parentElement.scrollTop=win.parentElement.scrollHeight;
+}
+
+// Special styled diplomatic declaration
+function addDeclMsg(id, text, note){
+  const win=document.getElementById('chat-window');
+  const k=kingdoms[id]||{name:'—',color:'#666',title:'',ruler:'',personality:{}};
+  const p=k.personality||{};
+  const d=document.createElement('div');
+  d.className='decl-card';
+  d.innerHTML=`
+    <div class="decl-ruler" style="color:${k.color}">
+      <div class="decl-seal" style="color:${k.color}"></div>
+      ${p.emoji||''} ${k.title||''} ${k.name} — ${k.ruler||''}
+      <span style="font-size:8px;color:#2a2820;font-style:italic;margin-left:auto">${note||''}</span>
+    </div>
+    <div style="font-size:13px;line-height:1.8;color:#888;padding-left:12px;">${text}</div>
+  `;
+  win.appendChild(d);
+  win.parentElement.scrollTop=win.parentElement.scrollHeight;
+}
+
+function addNews(title,body){
+  const win=document.getElementById('news-window');
+  const d=document.createElement('div');d.className='news-card';
+  d.innerHTML=`<div class="news-tag"><span>⚡ СРОЧНО</span><span>ХОД ${turnNum}</span></div><div class="news-headline">${title}</div><div class="news-body">${body}</div>`;
+  win.prepend(d);
+}
+function addHistory(text){
+  histLog.unshift({turn:turnNum,text});
+  const win=document.getElementById('history-window');
+  const d=document.createElement('div');d.className='hist-entry';
+  d.innerHTML=`<div class="hist-turn">ХОД ${turnNum}</div>${text}`;
+  win.prepend(d);
+}
+function addSystemMsg(text){
+  const win=document.getElementById('chat-window');
+  const d=document.createElement('div');d.className='msg system';
+  d.textContent=text;
+  win.appendChild(d);
+  win.parentElement.scrollTop=win.parentElement.scrollHeight;
+}
+
+function showIntro(){
+  const win=document.getElementById('chat-window');win.innerHTML='';
+  const myId=getMyKingdomId();
+  const k=kingdoms[myId]||{};
+  const h=document.createElement('div');h.className='msg system';
+  h.innerHTML=`Правители сошлись в час великого передела мира. Ты — ${k.title||'правитель'} <b style="color:${k.color}">${k.name}</b>, ${k.ruler}. Твои слова — закон. Твои войска — гроза.`;
+  win.appendChild(h);
+
+  Object.entries(kingdoms).forEach(([id,k])=>{
+    if(parseInt(id)===myId) return;
+    const p=k.personality||{};
+    const d=document.createElement('div');d.className='decl-card';
+    d.innerHTML=`
+      <div class="decl-ruler" style="color:${k.color}">
+        <div class="decl-seal" style="color:${k.color}"></div>
+        ${p.emoji||''} ${k.title||''} ${k.name} — ${k.ruler||''}
+      </div>
+      <div style="font-size:12px;line-height:1.7;color:#666;padding-left:12px;font-style:italic">${p.voice?.split('.')[0]||''}</div>
+      <div style="font-size:10px;color:#2a2820;padding-left:12px;margin-top:4px;">Цель: ${p.agenda||''}</div>
+    `;
+    win.appendChild(d);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  TOOLTIP
+// ═══════════════════════════════════════════════════════════════════════════════
+canvas.addEventListener('mousemove',e=>{
+  const rect=canvas.getBoundingClientRect();
+  const cx=Math.floor((e.clientX-rect.left)*canvas.width/rect.width/CELL);
+  const cy=Math.floor((e.clientY-rect.top)*canvas.height/rect.height/CELL);
+  const c=cell(cx,cy),tt=document.getElementById('tooltip');
+  if(c&&c.owner&&kingdoms[c.owner]){
+    const k=kingdoms[c.owner],p=k.personality||{};
+    const relLines=Object.entries(k.relations||{}).map(([rid,r])=>`<span style="color:${kingdoms[rid]?.color||'#555'}">${kingdoms[rid]?.name}</span>:${r}`).join(' ');
+    tt.innerHTML=`<b style="color:${k.color}">${p.emoji||''} ${k.name}</b><br>${k.ruler} · ${p.archetype||''}<br>💰 ${k.gold} ⚜<br><span style="font-size:9px">${relLines}</span>`;
+    tt.style.left=(e.clientX-rect.left+15)+'px';tt.style.top=(e.clientY-rect.top-10)+'px';tt.style.display='block';
+  } else tt.style.display='none';
+});
+canvas.addEventListener('mouseleave',()=>document.getElementById('tooltip').style.display='none');
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SYSTEM PROMPT
+// ═══════════════════════════════════════════════════════════════════════════════
+function buildPrompt(){
+  const myId = getMyKingdomId();
+  const colorMap=Object.entries(kingdoms).map(([id,k])=>
+    `ID=${id} ИМЯ="${k.name}" ЦВЕТ="${k.color}" ПРАВИТЕЛЬ="${k.ruler}" ЗОЛОТО=${k.gold} КЛЕТОК=${cells.filter(c=>c.owner==id).length}`
+  ).join('\n');
+
+  const relState=Object.entries(kingdoms).map(([id,k])=>{
+    const rels=Object.entries(k.relations||{}).map(([rid,r])=>`${kingdoms[rid]?.name}(ID${rid}):${r}`).join(',');
+    return `ID${id}(${k.name}): [${rels}]`;
+  }).join(' | ');
+
+  // In multiplayer, both P1 and P2 are human — only P3 and P4 are AI
+  const botIds = isMultiplayer ? [3,4] : [2,3,4];
+  const persLines=Object.entries(kingdoms).filter(([id])=>botIds.includes(parseInt(id))).map(([id,k])=>{
+    const p=k.personality||{};
+    return `  ID${id} [${k.name}] правитель "${k.ruler}" — АРХЕТИП: ${p.archetype}\n    ГОЛОС: ${p.voice}\n    ПОВЕСТКА: ${p.agenda}`;
+  }).join('\n');
+
+  const mpNote = isMultiplayer
+    ? `ВАЖНО: ID1 (${kingdoms[1].name}) и ID2 (${kingdoms[2].name}) — оба ЖИВЫЕ ИГРОКИ. Не говори от их имени. speaker_id может быть только из [${botIds.join(',')}].`
+    : `ID1 (${kingdoms[1].name}) — живой игрок. speaker_id никогда не равен 1.`;
+
+  return `Ты — WORLD ENGINE. Управляешь живым миром Pax. Всё происходит на глазах великих правителей.
+Активный игрок сейчас — ID${myId} (${kingdoms[myId]?.name}, правитель ${kingdoms[myId]?.ruler}).
+
+${mpNote}
+
+═══ КАРТА МИРа (Ход ${turnNum}) ═══
+${colorMap}
+Дипломатия: ${relState}
+
+═══ ЛИЧНОСТИ ПРАВИТЕЛЕЙ — НПС ═══
+${persLines}
+
+═══ АТМОСФЕРА — КРИТИЧНО ═══
+★ Пиши реплики как настоящий правитель средневековья / фэнтезийного мира. С достоинством, угрозой или лестью — в зависимости от архетипа.
+★ Используй первое лицо: "Мои легионы...", "Я, Зерхаль, не потерплю...", "Будьте осторожны, правитель..."
+★ ГОЛОС каждого правителя — это закон. Тиран не скажет "давайте обсудим". Трус не скажет "я вас уничтожу".
+★ Ответы живые, не шаблонные. Минимум 2-3 предложения в реплике. Упоминай конкретные события, территории, союзы.
+★ Боты реагируют на действия игрока и могут сами инициировать войны, союзы, требования.
+
+═══ ПРАВИЛА ДЕЙСТВИЙ ═══
+★ action обязателен для любого физического события (захват, спавн, обмен, удар).
+★ Золото не уходит в минус.
+★ Боты действуют каждый ход согласно своей повестке.
+★ speaker_id: кто отвечает. Если обращение к конкретному правителю — его ID. Если ко всем — случайный из [${botIds.join(',')}].
+
+═══ ТИПЫ ДЕЙСТВИЙ ═══
+conquest: from=жертва, to=агрессор, count=клеток
+exchange: from и to меняются территориями, count=клеток каждый
+spawn/revolt: from=откуда, new_faction={id≥5,name,color,title,gold}
+nuke/destroy: from=жертва, count=уничтожается
+reinforce: from=чья территория мерцает
+
+═══ ФОРМАТ ОТВЕТА — ТОЛЬКО JSON, БЕЗ MARKDOWN ═══
+{
+  "speaker_id": число,
+  "reply": "Реплика В ГОЛОСЕ ПРАВИТЕЛЯ — атмосферная, первое лицо, конкретная",
+  "bot_action_desc": "Что происходит в мире (необязательно)",
+  "news": {"title": "заголовок", "body": "2-3 предложения"},
+  "action": {"type": "...", "from": id, "to": id, "count": число},
+  "gold_update": {"id": дельта},
+  "relations_update": {"A-B": "war|peace|ally|neutral"},
+  "history_note": "Краткая запись для летописи (1 строка)"
+}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SEND (solo + multiplayer)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function send(){
+  if(!myTurn&&isMultiplayer) return;
+  const inp=document.getElementById('user-in'),btn=document.getElementById('send-btn');
+  const val=inp.value.trim();if(!val||btn.disabled)return;
+
+  const myId=getMyKingdomId();
+  // Show as diplomatic declaration
+  addDeclMsg(myId, val, 'ваш указ');
+  inp.value='';btn.disabled=true;
+  document.getElementById('thinking').style.display='block';
+
+  try{
+    const resp=await fetch("https://openrouter.ai/api/v1/chat/completions",{
+      method:"POST",
+      headers:{"Authorization":`Bearer ${API_KEY}`,"Content-Type":"application/json"},
+      body:JSON.stringify({
+        model:"google/gemini-2.0-flash-001",
+        messages:[{role:"system",content:buildPrompt()},...chatHistory.slice(-10),{role:"user",content:val}]
+      })
+    });
+    const data=await resp.json();
+    const raw=data.choices[0].message.content;
+    const jsonStr=(raw.match(/```json\s*([\s\S]*?)```/)||raw.match(/\{[\s\S]*\}/))?.[1]||(raw.match(/\{[\s\S]*\}/)||[''])[0];
+    const ai=JSON.parse(jsonStr);
+    chatHistory.push({role:"user",content:val},{role:"assistant",content:jsonStr});
+
+    applyGold(ai.gold_update);
+    applyRel(ai.relations_update);
+    execAction(ai.action);
+    if(ai.news) addNews(ai.news.title, ai.news.body);
+    if(ai.reply) addMsg(ai.speaker_id, ai.reply);
+    if(ai.bot_action_desc) addMsg(ai.speaker_id,`<i style="color:#444;font-size:11px">${ai.bot_action_desc}</i>`,true);
+    if(ai.history_note) addHistory(ai.history_note);
+
+    const labels={conquest:'⚔️ Завоевание',exchange:'🔄 Обмен',spawn:'🌱 Новая сила',revolt:'⚡ Восстание',nuke:'💥 Удар',reinforce:'🛡️ Укрепление'};
+    if(ai.action&&labels[ai.action.type]) flashEvent(labels[ai.action.type]);
+
+    turnNum++;
+    updateUI();
+
+    // In multiplayer: push move to Firebase, then block
+    if(isMultiplayer && roomRef){
+      const moveKey = roomRef.child('moves').push().key;
+      await roomRef.child('moves/'+moveKey).set({
+        by: myPlayerId,
+        userMsg: val,
+        aiResult: ai,
+        ts: Date.now(),
+        processed: false
+      });
+      myTurn = false;
+      setTurnBlock(true);
+    }
+
+  }catch(e){
+    console.error(e);
+    addSystemMsg('Связь с оракулом прервана. Повторите.');
+  }
+  document.getElementById('thinking').style.display='none';
+  btn.disabled=false;
+  if(!isMultiplayer||myTurn) inp.focus();
+}
+
+document.getElementById('send-btn').onclick=send;
+document.getElementById('user-in').onkeydown=e=>{if(e.key==='Enter')send();};
+window.addEventListener('resize',()=>{if(gameStarted)resize();});
+</script>
+</body>
+</html>
