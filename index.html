@@ -529,34 +529,60 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
 let peer = null;
 let conn = null;
 
-// ─── Конфигурация PeerJS с надёжными STUN/TURN серверами ──────────────────────
-// Используем несколько серверов для отказоустойчивости
-const PEER_CONFIG = {
-  debug: 1,
-  config: {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
-    ]
-  }
-};
+// ─── Конфигурация PeerJS ───────────────────────────────────────────────────────
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'stun:stun.stunprotocol.org:3478' },
+];
 
-// Список серверов для перебора при ошибке
+// Список серверов для перебора при ошибке (от самого надёжного к запасному)
 const PEER_SERVERS = [
-  // Сервер 1: официальный peerjs.com
-  { host: '0.peerjs.com', port: 443, path: '/', secure: true },
-  // Сервер 2: альтернативный публичный сервер
-  { host: 'peerjs.medula.io', port: 443, path: '/', secure: true },
+  { host: '0.peerjs.com',       port: 443,  path: '/', secure: true  },
+  { host: 'peerjs.medula.io',   port: 443,  path: '/', secure: true  },
+  { host: 'peerjs-server.herokuapp.com', port: 443, path: '/', secure: true },
+  // fallback: без сигнального сервера — прямой WebRTC через localStorage (одна машина / одна сеть)
 ];
 let peerServerIndex = 0;
 
 function makePeerOptions(extra = {}) {
   const srv = PEER_SERVERS[peerServerIndex % PEER_SERVERS.length];
-  return { ...srv, ...PEER_CONFIG, ...extra };
+  return {
+    ...srv,
+    debug: 2,
+    config: { iceServers: ICE_SERVERS },
+    ...extra
+  };
+}
+
+// ─── Локальный мультиплеер через BroadcastChannel (один браузер / одна вкладка) ──
+// Используется как ЗАПАСНОЙ канал если P2P серверы недоступны
+let bcChannel = null;
+let bcMode = false;   // флаг: используем BroadcastChannel вместо PeerJS
+
+function setupBroadcastChannel(asHost){
+  bcChannel = new BroadcastChannel('pax_mp_channel');
+  bcMode = true;
+  bcChannel.onmessage = (e) => onPeerData(JSON.stringify(e.data));
+  if(asHost){
+    const fakePeerId = 'LOCAL-' + Math.random().toString(36).slice(2,8).toUpperCase();
+    return fakePeerId;
+  }
+}
+
+function bcSend(data){
+  if(bcChannel) bcChannel.postMessage(data);
+}
+
+// Перехватываем peerSend чтобы поддерживать оба режима
+function peerSend(data){
+  if(bcMode){ bcSend(data); return; }
+  if(conn && conn.open) conn.send(JSON.stringify(data));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -657,9 +683,6 @@ function cancelHost(){
 }
 
 // ─── PeerJS helpers ────────────────────────────────────────────────────────────
-function peerSend(data){
-  if(conn && conn.open) conn.send(JSON.stringify(data));
-}
 
 function onPeerData(raw){
   let msg;
@@ -711,42 +734,54 @@ function hostGame(){
   sharedSeed = Math.floor(Math.random()*999999);
 
   const status = document.getElementById('lobby-status2');
-  status.textContent = 'Инициализация...';
+  status.innerHTML = 'Инициализация...';
 
-  // ── ИСПРАВЛЕНИЕ: createPeer с перебором серверов при ошибке ──
   function createPeer(attempt){
+    // После перебора всех P2P серверов — предложить локальный режим
     if(attempt > PEER_SERVERS.length){
-      status.textContent = '❌ Не удалось подключиться к серверу. Попробуйте позже.';
+      status.innerHTML = `❌ P2P серверы недоступны.<br>
+        <button onclick="hostLocal()" style="margin-top:10px;background:#1a3a1a;border:1px solid #3a6a2a;color:#8acc50;padding:6px 14px;font-family:'Cinzel',serif;font-size:9px;letter-spacing:2px;cursor:pointer;border-radius:1px;">
+          💻 ЛОКАЛЬНЫЙ РЕЖИМ (2 вкладки)
+        </button>`;
       return;
     }
     peerServerIndex = (attempt - 1) % PEER_SERVERS.length;
-    status.textContent = `Инициализация (сервер ${attempt}/${PEER_SERVERS.length})...`;
+    status.innerHTML = `Подключение к серверу ${attempt}/${PEER_SERVERS.length}...`;
 
     if(peer){ try{ peer.destroy(); }catch(e){} peer=null; }
+
+    // Timeout — если сервер не отвечает за 8 сек, пробуем следующий
+    const timeoutId = setTimeout(()=>{
+      status.innerHTML = `Сервер ${attempt} не отвечает, пробуем следующий...`;
+      try{ if(peer) peer.destroy(); }catch(e){}
+      peer = null;
+      createPeer(attempt + 1);
+    }, 8000);
 
     peer = new Peer(undefined, makePeerOptions());
 
     peer.on('error', e=>{
+      clearTimeout(timeoutId);
       console.error('PeerJS HOST error:', e.type, e);
-      if(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'socket-closed'){
-        // Попробуем следующий сервер
-        status.textContent = `Сервер недоступен, пробуем другой...`;
-        setTimeout(()=> createPeer(attempt + 1), 1000);
+      if(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'socket-closed' || e.type === 'unavailable-id'){
+        status.innerHTML = `Сервер ${attempt} недоступен, пробуем следующий...`;
+        setTimeout(()=> createPeer(attempt + 1), 800);
       } else {
-        status.textContent = 'Ошибка: ' + e.type + '. Попробуйте снова.';
+        status.innerHTML = 'Ошибка: ' + e.type;
+        setTimeout(()=> createPeer(attempt + 1), 1000);
       }
     });
 
     peer.on('open', id=>{
+      clearTimeout(timeoutId);
       const codeEl = document.getElementById('room-code-show');
-      // Encode server index into code so guest knows which server to use
       const fullCode = `${peerServerIndex}:${id}`;
       codeEl.textContent = fullCode;
       codeEl.dataset.fullId = fullCode;
 
       document.getElementById('screen-multi').style.display='none';
       document.getElementById('screen-waiting').style.display='block';
-      status.textContent = '';
+      status.innerHTML = '';
     });
 
     peer.on('connection', c=>{
@@ -761,6 +796,32 @@ function hostGame(){
   createPeer(1);
 }
 
+// ─── LOCAL (same-browser BroadcastChannel) HOST ────────────────────────────────
+function hostLocal(){
+  const code = setupBroadcastChannel(true);
+  const codeEl = document.getElementById('room-code-show');
+  codeEl.textContent = 'LOCAL-' + code.replace('LOCAL-','');
+  codeEl.dataset.fullId = 'LOCAL-' + code.replace('LOCAL-','');
+  document.getElementById('screen-multi').style.display='none';
+  document.getElementById('screen-waiting').style.display='block';
+  document.getElementById('room-code-hint').textContent = 'Откройте этот файл в другой вкладке и введите этот код';
+
+  // Wait for HELLO from other tab
+  bcChannel.onmessage = (e) => {
+    const msg = e.data;
+    if(msg.type === 'HELLO'){
+      p2RulerName = msg.ruler; p2RealmName = msg.realm;
+      const oppId = 2;
+      kingdoms[oppId].ruler = p2RulerName;
+      kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
+      bcSend({type:'START', seed:sharedSeed, ruler:myRulerName, realm:myRealmName});
+      launchMultiGame();
+    } else {
+      onPeerData(JSON.stringify(msg));
+    }
+  };
+}
+
 // ─── JOIN GAME ─────────────────────────────────────────────────────────────────
 function joinGame(){
   getInputs();
@@ -769,28 +830,52 @@ function joinGame(){
 
   myPlayerId = 2;
   isMultiplayer = true;
-
   const status3 = document.getElementById('lobby-status3');
+
+  // LOCAL режим — через BroadcastChannel
+  if(rawCode.toUpperCase().startsWith('LOCAL-')){
+    setupBroadcastChannel(false);
+    status3.textContent = 'Подключение к локальной игре...';
+    // Send HELLO through BroadcastChannel
+    setTimeout(()=>{
+      bcSend({type:'HELLO', ruler:myRulerName, realm:myRealmName});
+      status3.textContent = 'Ожидаем ответа хоста...';
+
+      // Listen for START
+      const origOnMsg = bcChannel.onmessage;
+      bcChannel.onmessage = (e) => {
+        const msg = e.data;
+        if(msg.type === 'START'){
+          p2RulerName = msg.ruler; p2RealmName = msg.realm;
+          sharedSeed = msg.seed;
+          const oppId = 1;
+          kingdoms[oppId].ruler = p2RulerName;
+          kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
+          bcChannel.onmessage = (e2) => onPeerData(JSON.stringify(e2.data));
+          launchMultiGame();
+        }
+      };
+    }, 300);
+    return;
+  }
 
   // Parse server index from code format "serverIdx:peerId"
   let targetPeerId = rawCode;
   let forcedServerIdx = -1;
-  if(rawCode.includes(':') && rawCode.indexOf(':') < 3){
-    const parts = rawCode.split(':');
-    const idx = parseInt(parts[0]);
-    if(!isNaN(idx) && idx < PEER_SERVERS.length){
-      forcedServerIdx = idx;
-      targetPeerId = parts.slice(1).join(':');
+  if(rawCode.includes(':') && rawCode.indexOf(':') < 2){
+    const colonIdx = rawCode.indexOf(':');
+    const maybeIdx = parseInt(rawCode.slice(0, colonIdx));
+    if(!isNaN(maybeIdx) && maybeIdx < PEER_SERVERS.length){
+      forcedServerIdx = maybeIdx;
+      targetPeerId = rawCode.slice(colonIdx + 1);
     }
   }
 
-  // ── ИСПРАВЛЕНИЕ: createGuestPeer с перебором серверов + retry ──
   function createGuestPeer(attempt){
     if(attempt > PEER_SERVERS.length){
-      status3.textContent = '❌ Не удалось подключиться ни к одному серверу. Проверьте интернет.';
+      status3.innerHTML = `❌ Серверы недоступны.<br><small style="color:#444">Попробуйте локальный режим: хост нажимает "Локальный режим", вы вводите код LOCAL-XXXXX</small>`;
       return;
     }
-    // If host encoded server index, use it first
     if(forcedServerIdx >= 0 && attempt === 1){
       peerServerIndex = forcedServerIdx;
     } else {
@@ -800,39 +885,48 @@ function joinGame(){
 
     if(peer){ try{ peer.destroy(); }catch(e){} peer=null; }
 
+    const timeoutId = setTimeout(()=>{
+      try{ if(peer) peer.destroy(); }catch(e){}
+      peer = null;
+      createGuestPeer(attempt + 1);
+    }, 8000);
+
     peer = new Peer(undefined, makePeerOptions());
 
     peer.on('error', e=>{
+      clearTimeout(timeoutId);
       console.error('PeerJS GUEST error:', e.type, e);
       if(e.type === 'peer-unavailable'){
-        // peer-unavailable: пир не найден — не меняем сервер, показываем ошибку
-        status3.textContent = '❌ Код не найден. Убедитесь, что хост ждёт вас, и скопируйте код полностью.';
+        status3.textContent = '❌ Код не найден. Убедитесь что хост ждёт вас, скопируйте код полностью.';
       } else if(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'socket-closed'){
-        status3.textContent = `Сервер недоступен, пробуем другой...`;
-        setTimeout(()=> createGuestPeer(attempt + 1), 1000);
+        setTimeout(()=> createGuestPeer(attempt + 1), 800);
       } else {
-        status3.textContent = 'Ошибка: ' + e.type + '. Проверьте код.';
+        status3.textContent = 'Ошибка: ' + e.type;
+        setTimeout(()=> createGuestPeer(attempt + 1), 1000);
       }
     });
 
     peer.on('open', ()=>{
+      clearTimeout(timeoutId);
       status3.textContent = 'Ищем правителя...';
-
-      // ── ИСПРАВЛЕНИЕ: небольшая задержка, чтобы сервер зарегистрировал хоста
       setTimeout(()=>{
         conn = peer.connect(targetPeerId, {reliable:true});
-
+        const connTimeout = setTimeout(()=>{
+          status3.textContent = 'Соединение не установлено, пробуем снова...';
+          createGuestPeer(attempt + 1);
+        }, 7000);
         conn.on('open', ()=>{
+          clearTimeout(connTimeout);
           status3.textContent = 'Соединение установлено!';
           conn.on('data', onPeerData);
           peerSend({type:'HELLO', ruler:myRulerName, realm:myRealmName});
         });
-
         conn.on('error', e=>{
+          clearTimeout(connTimeout);
           status3.textContent = '❌ Не удалось подключиться. Проверьте код.';
           console.error('conn error', e);
         });
-      }, 500);
+      }, 600);
     });
   }
 
