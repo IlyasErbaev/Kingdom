@@ -6,8 +6,7 @@
 <title>PAX — Мировой Движок v4 · Мультиплеер</title>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@400;700;900&family=Cinzel:wght@400;600;700&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
 
-<!-- PeerJS for P2P multiplayer -->
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- Multiplayer via plain HTTP polling (no SDK needed) -->
 
 <style>
 :root {
@@ -524,65 +523,323 @@ canvas{display:block;width:100%;height:100%;image-rendering:pixelated;}
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════════
-//  PEERJS — P2P мультиплеер
+//  МУЛЬТИПЛЕЕР — через бесплатный облачный хранитель данных
+//  Используем JSONBin.io: бесплатно, без регистрации для чтения, надёжно
 // ═══════════════════════════════════════════════════════════════════════════════
-let peer = null;
-let conn = null;
 
-// ─── Конфигурация PeerJS ───────────────────────────────────────────────────────
-const ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  { urls: 'stun:stun.cloudflare.com:3478' },
-  { urls: 'stun:global.stun.twilio.com:3478' },
-  { urls: 'stun:stun.stunprotocol.org:3478' },
-];
+// JSONBin Master Key (публичный ключ для демо-игры PAX)
+const JBIN_KEY = '$2a$10$O5NcBbLexIOulH9nd4YuLeNbMvfG5tmaF9xLYOdnk4X2YqvY3GQWS';
+const JBIN_BASE = 'https://api.jsonbin.io/v3';
 
-// Список серверов для перебора при ошибке (от самого надёжного к запасному)
-const PEER_SERVERS = [
-  { host: '0.peerjs.com',       port: 443,  path: '/', secure: true  },
-  { host: 'peerjs.medula.io',   port: 443,  path: '/', secure: true  },
-  { host: 'peerjs-server.herokuapp.com', port: 443, path: '/', secure: true },
-  // fallback: без сигнального сервера — прямой WebRTC через localStorage (одна машина / одна сеть)
-];
-let peerServerIndex = 0;
+// Храним состояние как 2 отдельных бина (один на хоста, один на гостя)
+let binIdHost = null;  // bin с сообщением от хоста к гостю
+let binIdGuest = null; // bin с сообщением от гостя к хосту
 
-function makePeerOptions(extra = {}) {
-  const srv = PEER_SERVERS[peerServerIndex % PEER_SERVERS.length];
-  return {
-    ...srv,
-    debug: 2,
-    config: { iceServers: ICE_SERVERS },
-    ...extra
-  };
+let fbRoomCode = '';
+let fbMySlot = '';    // 'host' or 'guest'
+let fbOppSlot = '';
+
+let pollInterval = null;
+let lastOppTs = 0;
+
+// Создать новый bin с данными
+async function binCreate(data){
+  const r = await fetch(`${JBIN_BASE}/b`, {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'X-Master-Key': JBIN_KEY,
+      'X-Bin-Private': 'false',
+      'X-Bin-Name': 'pax-room-' + fbRoomCode + '-' + fbMySlot
+    },
+    body: JSON.stringify({...data, _ts: Date.now(), _from: myPlayerId})
+  });
+  if(!r.ok){ const t = await r.text(); throw new Error(r.status + ': ' + t); }
+  const j = await r.json();
+  return j.metadata.id;
 }
 
-// ─── Локальный мультиплеер через BroadcastChannel (один браузер / одна вкладка) ──
-// Используется как ЗАПАСНОЙ канал если P2P серверы недоступны
-let bcChannel = null;
-let bcMode = false;   // флаг: используем BroadcastChannel вместо PeerJS
+// Обновить bin
+async function binUpdate(binId, data){
+  const r = await fetch(`${JBIN_BASE}/b/${binId}`, {
+    method:'PUT',
+    headers:{
+      'Content-Type':'application/json',
+      'X-Master-Key': JBIN_KEY
+    },
+    body: JSON.stringify({...data, _ts: Date.now(), _from: myPlayerId})
+  });
+  if(!r.ok){ const t = await r.text(); throw new Error(r.status + ': ' + t); }
+}
 
-function setupBroadcastChannel(asHost){
-  bcChannel = new BroadcastChannel('pax_mp_channel');
-  bcMode = true;
-  bcChannel.onmessage = (e) => onPeerData(JSON.stringify(e.data));
-  if(asHost){
-    const fakePeerId = 'LOCAL-' + Math.random().toString(36).slice(2,8).toUpperCase();
-    return fakePeerId;
+// Прочитать bin
+async function binRead(binId){
+  const r = await fetch(`${JBIN_BASE}/b/${binId}/latest`, {
+    headers:{'X-Master-Key': JBIN_KEY}
+  });
+  if(!r.ok) throw new Error('read failed: ' + r.status);
+  const j = await r.json();
+  return j.record;
+}
+
+// Найти bin по имени (для гостя — ищем bin хоста)
+async function binSearch(name){
+  const r = await fetch(`${JBIN_BASE}/b?metaOnly=false`, {
+    headers:{'X-Master-Key': JBIN_KEY}
+  });
+  if(!r.ok) throw new Error('search failed: ' + r.status);
+  const bins = await r.json();
+  const found = bins.find(b => b.snippetMeta?.name === name);
+  return found ? found.snippetMeta.id : null;
+}
+
+// Отправить сообщение оппоненту (записываем в свой bin)
+let myBinId = null;
+async function fbSend(data){
+  try{
+    const payload = {...data, _ts: Date.now(), _from: myPlayerId};
+    if(!myBinId){
+      myBinId = await binCreate(payload);
+    } else {
+      await binUpdate(myBinId, payload);
+    }
+  } catch(e){ console.error('fbSend error', e); }
+}
+
+function peerSend(data){ fbSend(data); }
+
+function startPolling(){
+  if(pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async ()=>{
+    if(!oppBinId) {
+      // Ещё не знаем ID бина оппонента — пробуем найти по коду комнаты
+      try{
+        oppBinId = await findOppBin();
+      } catch(e){ /* ещё не создан */ }
+      return;
+    }
+    try{
+      const msg = await binRead(oppBinId);
+      if(msg && msg._ts && msg._ts !== lastOppTs){
+        lastOppTs = msg._ts;
+        onPeerData(msg);
+      }
+    }catch(e){ /* ignore */ }
+  }, 2000);
+}
+
+let oppBinId = null;
+
+async function findOppBin(){
+  // Гость ищет бин хоста и наоборот
+  const oppSlot = myPlayerId === 1 ? 'guest' : 'host';
+  const targetName = `pax-${fbRoomCode}-${oppSlot}`;
+  // Поиск через список всех бинов
+  const r = await fetch(`${JBIN_BASE}/b`, { headers:{'X-Master-Key': JBIN_KEY} });
+  if(!r.ok) throw new Error('list failed');
+  const list = await r.json();
+  const found = list.find(b => (b.record?.binName || b.metadata?.name || '').includes(targetName)
+    || (b.metadata && b.metadata.name && b.metadata.name.includes(fbRoomCode)));
+  return found ? (found.metadata?.id || found._id) : null;
+}
+
+function stopPolling(){
+  if(pollInterval){ clearInterval(pollInterval); pollInterval=null; }
+}
+
+function onPeerData(msg){
+  if(!msg || typeof msg !== 'object') return;
+  if(msg._from === myPlayerId) return;
+
+  if(msg.type === 'HELLO'){
+    p2RulerName = msg.ruler;
+    p2RealmName = msg.realm;
+    const oppId = myPlayerId===1?2:1;
+    kingdoms[oppId].ruler = p2RulerName;
+    kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
+    peerSend({type:'START', seed:sharedSeed, ruler:myRulerName, realm:myRealmName});
+    launchMultiGame();
+  }
+  else if(msg.type === 'START'){
+    p2RulerName = msg.ruler;
+    p2RealmName = msg.realm;
+    sharedSeed = msg.seed;
+    const oppId = myPlayerId===1?2:1;
+    kingdoms[oppId].ruler = p2RulerName;
+    kingdoms[oppId].name  = p2RealmName.toUpperCase().slice(0,16);
+    launchMultiGame();
+  }
+  else if(msg.type === 'MOVE'){
+    applyOpponentMove(msg);
   }
 }
 
-function bcSend(data){
-  if(bcChannel) bcChannel.postMessage(data);
+function copyCode(){
+  const id = document.getElementById('room-code-show').dataset.fullId || document.getElementById('room-code-show').textContent;
+  navigator.clipboard.writeText(id).then(()=>{
+    document.getElementById('copy-code-btn').textContent='✅ Скопировано!';
+    setTimeout(()=>document.getElementById('copy-code-btn').textContent='📋 Скопировать код',2000);
+  }).catch(()=>{
+    const el = document.getElementById('room-code-show');
+    const range = document.createRange(); range.selectNode(el);
+    window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+  });
 }
 
-// Перехватываем peerSend чтобы поддерживать оба режима
-function peerSend(data){
-  if(bcMode){ bcSend(data); return; }
-  if(conn && conn.open) conn.send(JSON.stringify(data));
+// ─── HOST GAME ─────────────────────────────────────────────────────────────────
+function hostGame(){
+  getInputs();
+  myPlayerId = 1;
+  isMultiplayer = true;
+  sharedSeed = Math.floor(Math.random()*999999);
+  fbMySlot  = 'p1';
+  fbOppSlot = 'p2';
+
+  const status = document.getElementById('lobby-status2');
+  status.textContent = 'Создаём комнату...';
+
+  // Генерируем простой 6-символьный код
+  fbRoomCode = Math.random().toString(36).slice(2,8).toUpperCase();
+
+  // Записываем комнату в Firebase
+  fbWrite(`rooms/${fbRoomCode}/meta`, { created: Date.now(), seed: sharedSeed })
+    .then(()=>{
+      const codeEl = document.getElementById('room-code-show');
+      codeEl.textContent = fbRoomCode;
+      codeEl.dataset.fullId = fbRoomCode;
+      document.getElementById('screen-multi').style.display='none';
+      document.getElementById('screen-waiting').style.display='block';
+      status.textContent = '';
+
+      // Начинаем polling — ждём гостя
+      fbLastOppTs = 0;
+      startPolling();
+
+      // Автоудаление через 30 мин
+      setTimeout(()=>{ fbDelete(`rooms/${fbRoomCode}`).catch(()=>{}); }, 30*60*1000);
+    })
+    .catch(e=>{
+      status.innerHTML = `❌ Ошибка сети: ${e.message}<br><small style="color:#555">Проверьте интернет и попробуйте снова</small>`;
+    });
+}
+
+function cancelHost(){
+  stopPolling();
+  fbDelete(`rooms/${fbRoomCode}`).catch(()=>{});
+  document.getElementById('screen-waiting').style.display='none';
+  document.getElementById('screen-multi').style.display='block';
+}
+
+// ─── JOIN GAME ─────────────────────────────────────────────────────────────────
+function joinGame(){
+  getInputs();
+  const rawCode = document.getElementById('join-code-in').value.trim().toUpperCase();
+  if(!rawCode){ document.getElementById('lobby-status3').textContent='Введите код'; return; }
+
+  myPlayerId = 2;
+  isMultiplayer = true;
+  fbMySlot  = 'p2';
+  fbOppSlot = 'p1';
+  fbRoomCode = rawCode;
+
+  const status3 = document.getElementById('lobby-status3');
+  status3.textContent = 'Ищем комнату...';
+
+  fbRead(`rooms/${fbRoomCode}/meta`).then(meta=>{
+    if(!meta || !meta.created){
+      status3.textContent = '❌ Комната не найдена. Проверьте код.';
+      return;
+    }
+    sharedSeed = meta.seed;
+    status3.textContent = 'Комната найдена! Подключаемся...';
+
+    fbLastOppTs = 0;
+    startPolling();
+
+    // Отправляем HELLO
+    fbSend({type:'HELLO', ruler:myRulerName, realm:myRealmName});
+    status3.textContent = 'Ожидаем ответа правителя...';
+  }).catch(e=>{
+    status3.textContent = '❌ Ошибка сети: ' + e.message;
+  });
+}
+
+function backToMulti(){
+  stopPolling();
+  document.getElementById('screen-join').style.display='none';
+  document.getElementById('screen-multi').style.display='block';
+}
+
+function goMulti(){
+  getInputs();
+  document.getElementById('screen-setup').style.display='none';
+  document.getElementById('screen-multi').style.display='block';
+}
+function backToSetup(){
+  document.getElementById('screen-multi').style.display='none';
+  document.getElementById('screen-setup').style.display='block';
+}
+function goJoin(){
+  document.getElementById('screen-multi').style.display='none';
+  document.getElementById('screen-join').style.display='block';
+}
+
+// ─── LAUNCH MULTI GAME ─────────────────────────────────────────────────────────
+function launchMultiGame(){
+  if(gameStarted) return;
+  gameStarted = true;
+  kingdoms[myPlayerId].ruler = myRulerName;
+  kingdoms[myPlayerId].name  = myRealmName.toUpperCase().slice(0,16);
+
+  document.getElementById('lobby').style.display='none';
+  document.getElementById('main').style.display='flex';
+
+  initGame(sharedSeed);
+
+  if(myPlayerId===2){
+    myTurn = false;
+    setTurnBlock(true);
+  } else {
+    myTurn = true;
+    setTurnBlock(false);
+  }
+}
+
+// ─── APPLY OPPONENT MOVE ───────────────────────────────────────────────────────
+function applyOpponentMove(move){
+  const ai = move.aiResult;
+  if(ai){
+    applyGold(ai.gold_update);
+    applyRel(ai.relations_update);
+    execAction(ai.action);
+    if(ai.news) addNews(ai.news.title, ai.news.body);
+    const oppId = myPlayerId===1?2:1;
+    addDeclMsg(oppId, move.userMsg, 'указ противника');
+    if(ai.reply) addMsg(ai.speaker_id, ai.reply);
+    if(ai.bot_action_desc) addMsg(ai.speaker_id,`<i style="color:#444;font-size:11px">${ai.bot_action_desc}</i>`,true);
+    if(ai.history_note) addHistory(ai.history_note);
+    const labels={conquest:'⚔️ Завоевание',exchange:'🔄 Обмен',spawn:'🌱 Новая сила',revolt:'⚡ Восстание',nuke:'💥 Удар',reinforce:'🛡️ Укрепление'};
+    if(ai.action&&labels[ai.action.type]) flashEvent(labels[ai.action.type]);
+    turnNum++;
+    updateUI();
+  }
+  myTurn = true;
+  setTurnBlock(false);
+  addSystemMsg('⚡ Ваш ход, правитель.');
+}
+
+function setTurnBlock(block){
+  document.getElementById('turn-overlay').classList.toggle('show', block);
+  document.getElementById('send-btn').disabled = block;
+  document.getElementById('user-in').disabled = block;
+  document.getElementById('next-turn-btn').disabled = block;
+  const badge = document.getElementById('mp-turn-badge');
+  if(isMultiplayer){
+    badge.textContent = block ? 'ХОД ПРОТИВНИКА' : 'ВАШ ХОД';
+    badge.className = 'mp-turn-badge ' + (block?'theirs':'yours');
+  } else {
+    badge.style.display='none';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1636,11 +1893,12 @@ async function send(){
     turnNum++;
     updateUI();
 
-    if(isMultiplayer && conn){
+    if(isMultiplayer){
       peerSend({
         type: 'MOVE',
         userMsg: val,
-        aiResult: ai
+        aiResult: ai,
+        _from: myPlayerId
       });
       myTurn = false;
       setTurnBlock(true);
